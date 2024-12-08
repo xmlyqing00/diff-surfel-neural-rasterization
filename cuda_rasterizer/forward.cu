@@ -146,13 +146,12 @@ __device__ bool compute_aabb(
 
 // Perform initial steps for each Gaussian prior to rasterization.
 template<int C>
-__global__ void preprocessCUDA(int P, int D, int M,
+__global__ void preprocessCUDA(int P,
 	const float* orig_points,
 	const glm::vec2* scales,
 	const float scale_modifier,
 	const glm::vec4* rotations,
-	const float* opacities,
-	const float* shs,
+<	const float* opacities,
 	bool* clamped,
 	const float* transMat_precomp,
 	const float* colors_precomp,
@@ -164,9 +163,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const float focal_x, const float focal_y,
 	int* radii,
 	float2* points_xy_image,
-	float* depths,
-	float* transMats,
-	float* rgb,
+	float* depths,	float* transMats,
 	float4* normal_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
@@ -236,12 +233,12 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		return;
 
 	// Compute colors 
-	if (colors_precomp == nullptr) {
-		glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
-		rgb[idx * C + 0] = result.x;
-		rgb[idx * C + 1] = result.y;
-		rgb[idx * C + 2] = result.z;
-	}
+	// if (colors_precomp == nullptr) {
+	// 	glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
+	// 	rgb[idx * C + 0] = result.x;
+	// 	rgb[idx * C + 1] = result.y;
+	// 	rgb[idx * C + 2] = result.z;
+	// }
 
 	depths[idx] = p_view.z;
 	radii[idx] = (int)radius;
@@ -249,6 +246,50 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	normal_opacity[idx] = {normal.x, normal.y, normal.z, opacities[idx]};
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
 }
+
+
+__device__ void infer_rgbd(
+	const float2 & uv,
+	float * result,
+	int idx,
+	const Network& net
+) {
+	// auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+	// torch::Tensor uv = torch::from_blob(&uv_, {2});
+	// float l1_weight[hidden_dim * input_dim];
+	// float l1_bias[hidden_dim];
+	// net.get_params(idx, l1_weight, l1_bias);
+
+	// float linear_res[hidden_dim];
+	// float uv_[2] = {uv.x, uv.y};
+	// net.linear(uv_, linear_res, l1_weight, l1_bias, input_dim, hidden_dim);
+
+	// torch::Tensor uv = net.l1_lw.index({idx});
+	// torch::Tensor l1_lw = net.l1_lw.index({idx});
+	// torch::Tensor l1_mg = net.l1_mg.index({idx}); 
+	// torch::Tensor l1_lw2 = net.l1_lw2.index({idx});
+	// torch::Tensor lout_lw = net.lout_lw.index({idx});
+
+	// torch::Tensor l1_weight = l1_lw.index({Slice(None, l1_lw_len - hidden_dim)}).reshape({hidden_dim, input_dim});
+	// torch::Tensor l1_bias = l1_lw.index({Slice(l1_lw_len - hidden_dim, None)});
+	// torch::Tensor l1_mu = l1_mg.index({Slice(None, l1_mg_len - hidden_dim)}).reshape({hidden_dim, input_dim});
+	// torch::Tensor l1_gamma = l1_mg.index({Slice(l1_mg_len - hidden_dim, None)});
+	// torch::Tensor l1_weight2 = l1_lw2.index({Slice(None, l1_lw2_len - hidden_dim)}).reshape({hidden_dim, hidden_dim});
+	// torch::Tensor l1_bias2 = l1_lw2.index({Slice(l1_lw2_len - hidden_dim, None)});
+	// torch::Tensor lout_weight = lout_lw.index({Slice(None, lout_lw_len - hidden_dim)}).reshape({output_dim, hidden_dim});
+	// torch::Tensor lout_bias = lout_lw.index({Slice(lout_lw_len - hidden_dim, None)});
+
+	// torch::Tensor linear = matmul(l1_weight, uv) + l1_bias;
+	// torch::Tensor D = torch::sum(torch::square(uv), 1) + torch::sum(torch::square(l1_mu), 1) - 2 * matmul(uv, l1_mu.transpose(1, 0));
+	// torch::Tensor sin_result = sin(linear);
+	// torch::Tensor exp_result = exp(-0.5 * D * l1_gamma);
+	// torch::Tensor layer_result = sin_result * exp_result;
+	// torch::Tensor linear2 = matmul(l1_weight2, layer_result) + l1_bias2;
+	// torch::Tensor out = matmul(lout_weight, linear2) + lout_bias;
+
+	// result = linear_res;
+}
+
 
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
@@ -265,6 +306,7 @@ renderCUDA(
 	const float* __restrict__ transMats,
 	const float* __restrict__ depths,
 	const float4* __restrict__ normal_opacity,
+	const Network& __restrict__ net,
 	float* __restrict__ final_T,
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
@@ -302,7 +344,7 @@ renderCUDA(
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
-	float C[CHANNELS] = { 0 };
+	float C[NUM_CHANNELS + 1] = { 0 };
 
 
 #if RENDER_AXUTILITY
@@ -386,14 +428,15 @@ renderCUDA(
 			float alpha = min(0.99f, opa * exp(power));
 			if (alpha < 1.0f / 255.0f)
 				continue;
-			float test_T = T * (1 - alpha);
+			opa = min(0.99f, opa);
+			float test_T = T * (1 - opa);  // alpha -> opa
 			if (test_T < 0.0001f)
 			{
 				done = true;
 				continue;
 			}
 
-			float w = alpha * T;
+			float w = opa * T;  // alpha -> opa
 #if RENDER_AXUTILITY
 			// Render depth distortion map
 			// Efficient implementation of distortion loss, see 2DGS' paper appendix.
@@ -414,8 +457,11 @@ renderCUDA(
 #endif
 
 			// Eq. (3) from 3D Gaussian splatting paper.
-			for (int ch = 0; ch < CHANNELS; ch++)
-				C[ch] += features[collected_id[j] * CHANNELS + ch] * w;
+			// for (int ch = 0; ch < NUM_CHANNELS; ch++) {
+				// C[ch] += features[collected_id[j] * NUM_CHANNELS + ch] * w;
+			// }
+			infer_rgbd(s, C, collected_id[j], net);
+				
 			T = test_T;
 
 			// Keep track of last range entry to update this
@@ -430,7 +476,7 @@ renderCUDA(
 	{
 		final_T[pix_id] = T;
 		n_contrib[pix_id] = last_contributor;
-		for (int ch = 0; ch < CHANNELS; ch++)
+		for (int ch = 0; ch < NUM_CHANNELS; ch++)
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
 
 #if RENDER_AXUTILITY
@@ -458,6 +504,7 @@ void FORWARD::render(
 	const float* transMats,
 	const float* depths,
 	const float4* normal_opacity,
+	const Network& net,
 	float* final_T,
 	uint32_t* n_contrib,
 	const float* bg_color,
@@ -474,6 +521,7 @@ void FORWARD::render(
 		transMats,
 		depths,
 		normal_opacity,
+		net,
 		final_T,
 		n_contrib,
 		bg_color,
@@ -481,13 +529,12 @@ void FORWARD::render(
 		out_others);
 }
 
-void FORWARD::preprocess(int P, int D, int M,
+void FORWARD::preprocess(int P,
 	const float* means3D,
 	const glm::vec2* scales,
 	const float scale_modifier,
 	const glm::vec4* rotations,
 	const float* opacities,
-	const float* shs,
 	bool* clamped,
 	const float* transMat_precomp,
 	const float* colors_precomp,
@@ -508,13 +555,12 @@ void FORWARD::preprocess(int P, int D, int M,
 	bool prefiltered)
 {
 	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
-		P, D, M,
+		P, 
 		means3D,
 		scales,
 		scale_modifier,
 		rotations,
 		opacities,
-		shs,
 		clamped,
 		transMat_precomp,
 		colors_precomp,
@@ -528,7 +574,6 @@ void FORWARD::preprocess(int P, int D, int M,
 		means2D,
 		depths,
 		transMats,
-		rgb,
 		normal_opacity,
 		grid,
 		tiles_touched,

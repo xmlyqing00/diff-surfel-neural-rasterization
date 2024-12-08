@@ -43,10 +43,9 @@ namespace BACKWARD
 		float* dL_dcolors);
 
 	void preprocess(
-		int P, int D, int M,
+		int P,
 		const float3* means,
 		const int* radii,
-		const float* shs,
 		const bool* clamped,
 		const glm::vec2* scales,
 		const glm::vec4* rotations,
@@ -61,7 +60,6 @@ namespace BACKWARD
 		const float* dL_dnormal3D,
 		float* dL_dtransMat,
 		float* dL_dcolor,
-		float* dL_dsh,
 		glm::vec3* dL_dmeans,
 		glm::vec2* dL_dscale,
 		glm::vec4* dL_drot);

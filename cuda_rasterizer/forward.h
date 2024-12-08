@@ -17,17 +17,19 @@
 #include "device_launch_parameters.h"
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
+#include <torch/extension.h>
+#include "network.h"
+
 
 namespace FORWARD
 {
 	// Perform initial steps for each Gaussian prior to rasterization.
-	void preprocess(int P, int D, int M,
+	void preprocess(int P,
 		const float* orig_points,
 		const glm::vec2* scales,
 		const float scale_modifier,
 		const glm::vec4* rotations,
 		const float* opacities,
-		const float* shs,
 		bool* clamped,
 		const float* transMat_precomp,
 		const float* colors_precomp,
@@ -40,8 +42,6 @@ namespace FORWARD
 		int* radii,
 		float2* points_xy_image,
 		float* depths,
-		// float* isovals,
-		// float3* normals,
 		float* transMats,
 		float* colors,
 		float4* normal_opacity,
@@ -61,6 +61,7 @@ namespace FORWARD
 		const float* transMats,
 		const float* depths,
 		const float4* normal_opacity,
+		const Network& net,
 		float* final_T,
 		uint32_t* n_contrib,
 		const float* bg_color,

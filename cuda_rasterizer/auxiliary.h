@@ -34,6 +34,15 @@
 // #define FAR_PLANE 100.0
 #define DETACH_WEIGHT 0
 
+typedef long long ll;
+const int input_dim = 2;
+const int hidden_dim = 8;
+const int output_dim = 4;
+const ll l1_lw_len = input_dim * hidden_dim + hidden_dim;
+const ll l1_mg_len = input_dim * hidden_dim + hidden_dim;
+const ll l1_lw2_len = hidden_dim * hidden_dim + hidden_dim;
+const ll lout_lw_len = hidden_dim * output_dim + output_dim;
+
 __device__ const float near_n = 0.2;
 __device__ const float far_n = 100.0;
 __device__ const float FilterSize = 0.707106; // sqrt(2) / 2
@@ -193,15 +202,15 @@ __forceinline__ __device__ bool in_frustum(int idx,
 
 	// Bring points to screen space
 	float4 p_hom = transformPoint4x4(p_orig, projmatrix);
-	float p_w = 1.0f / (p_hom.w + 0.0000001f);
-	float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
+	// float p_w = 1.0f / (p_hom.w + 0.0000001f);
+	// float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
 	p_view = transformPoint4x3(p_orig, viewmatrix);
 
 	if (p_view.z <= 0.2f)// || ((p_proj.x < -1.3 || p_proj.x > 1.3 || p_proj.y < -1.3 || p_proj.y > 1.3)))
 	{
 		if (prefiltered)
 		{
-			printf("Point is filtered although prefiltered is set. This shouldn't happen!");
+			printf("Point is f iltered although prefiltered is set. This shouldn't happen!");
 			__trap();
 		}
 		return false;

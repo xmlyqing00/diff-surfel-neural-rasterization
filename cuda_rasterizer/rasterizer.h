@@ -14,6 +14,9 @@
 
 #include <vector>
 #include <functional>
+#include <torch/extension.h>
+#include "network.h"
+
 
 namespace CudaRasterizer
 {
@@ -32,16 +35,16 @@ namespace CudaRasterizer
 			std::function<char* (size_t)> geometryBuffer,
 			std::function<char* (size_t)> binningBuffer,
 			std::function<char* (size_t)> imageBuffer,
-			const int P, int D, int M,
+			const int P,
 			const float* background,
 			const int width, int height,
 			const float* means3D,
-			const float* shs,
 			const float* colors_precomp,
 			const float* opacities,
 			const float* scales,
 			const float scale_modifier,
 			const float* rotations,
+			const Network& net,
 			const float* transMat_precomp,
 			const float* viewmatrix,
 			const float* projmatrix,
@@ -54,15 +57,15 @@ namespace CudaRasterizer
 			bool debug = false);
 
 		static void backward(
-			const int P, int D, int M, int R,
+			const int P, int R,
 			const float* background,
 			const int width, int height,
 			const float* means3D,
-			const float* shs,
 			const float* colors_precomp,
 			const float* scales,
 			const float scale_modifier,
 			const float* rotations,
+			const Network& net,
 			const float* transMat_precomp,
 			const float* viewmatrix,
 			const float* projmatrix,
@@ -80,7 +83,6 @@ namespace CudaRasterizer
 			float* dL_dcolor,
 			float* dL_dmean3D,
 			float* dL_dtransMat,
-			float* dL_dsh,
 			float* dL_dscale,
 			float* dL_drot,
 			bool debug);

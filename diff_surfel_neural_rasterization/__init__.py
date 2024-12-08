@@ -21,22 +21,28 @@ def cpu_deep_copy_tuple(input_tuple):
 def rasterize_gaussians(
     means3D,
     means2D,
-    sh,
     colors_precomp,
     opacities,
     scales,
     rotations,
+    l1_lw,
+    l1_mg,
+    l2_lw2,
+    lout_lw,
     cov3Ds_precomp,
     raster_settings,
-):
+):  
     return _RasterizeGaussians.apply(
         means3D,
         means2D,
-        sh,
         colors_precomp,
         opacities,
         scales,
         rotations,
+        l1_lw,
+        l1_mg,
+        l2_lw2,
+        lout_lw,
         cov3Ds_precomp,
         raster_settings,
     )
@@ -47,16 +53,20 @@ class _RasterizeGaussians(torch.autograd.Function):
         ctx,
         means3D,
         means2D,
-        sh,
         colors_precomp,
         opacities,
         scales,
         rotations,
+        l1_lw,
+        l1_mg,
+        l2_lw2,
+        lout_lw,
         cov3Ds_precomp,
         raster_settings,
     ):
 
-        # Restructure arguments the way that the C++ lib expects them
+        # Restructure arguments the way that the C++ lib expects them,
+
         args = (
             raster_settings.bg, 
             means3D,
@@ -64,6 +74,10 @@ class _RasterizeGaussians(torch.autograd.Function):
             opacities,
             scales,
             rotations,
+            l1_lw,
+            l1_mg,
+            l2_lw2,
+            lout_lw,
             raster_settings.scale_modifier,
             cov3Ds_precomp,
             raster_settings.viewmatrix,
@@ -72,8 +86,6 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.tanfovy,
             raster_settings.image_height,
             raster_settings.image_width,
-            sh,
-            raster_settings.sh_degree,
             raster_settings.campos,
             raster_settings.prefiltered,
             raster_settings.debug
@@ -94,7 +106,7 @@ class _RasterizeGaussians(torch.autograd.Function):
         # Keep relevant tensors for backward
         ctx.raster_settings = raster_settings
         ctx.num_rendered = num_rendered
-        ctx.save_for_backward(colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, geomBuffer, binningBuffer, imgBuffer)
+        ctx.save_for_backward(colors_precomp, means3D, scales, rotations, l1_lw, l1_mg, l2_lw2, lout_lw, cov3Ds_precomp, radii, geomBuffer, binningBuffer, imgBuffer)
         return color, radii, depth
 
     @staticmethod
@@ -103,7 +115,7 @@ class _RasterizeGaussians(torch.autograd.Function):
         # Restore necessary values from context
         num_rendered = ctx.num_rendered
         raster_settings = ctx.raster_settings
-        colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, geomBuffer, binningBuffer, imgBuffer = ctx.saved_tensors
+        colors_precomp, means3D, scales, rotations, l1_lw, l1_mg, l2_lw2, lout_lw, cov3Ds_precomp, radii, geomBuffer, binningBuffer, imgBuffer = ctx.saved_tensors
 
         # Restructure args as C++ method expects them
         args = (raster_settings.bg,
@@ -112,6 +124,10 @@ class _RasterizeGaussians(torch.autograd.Function):
                 colors_precomp, 
                 scales, 
                 rotations, 
+                l1_lw,
+                l1_mg,
+                l2_lw2,
+                lout_lw,
                 raster_settings.scale_modifier, 
                 cov3Ds_precomp, 
                 raster_settings.viewmatrix, 
@@ -120,8 +136,6 @@ class _RasterizeGaussians(torch.autograd.Function):
                 raster_settings.tanfovy, 
                 grad_out_color,
                 grad_depth,
-                sh, 
-                raster_settings.sh_degree, 
                 raster_settings.campos,
                 geomBuffer,
                 num_rendered,
@@ -133,22 +147,24 @@ class _RasterizeGaussians(torch.autograd.Function):
         if raster_settings.debug:
             cpu_args = cpu_deep_copy_tuple(args) # Copy them before they can be corrupted
             try:
-                grad_means2D, grad_colors_precomp, grad_opacities, grad_means3D, grad_cov3Ds_precomp, grad_sh, grad_scales, grad_rotations = _C.rasterize_gaussians_backward(*args)
+                grad_means2D, grad_colors_precomp, grad_opacities, grad_means3D, grad_cov3Ds_precomp, grad_scales, grad_rotations, \
+                    grad_l1_lw, grad_l1_mg, grad_l1_lw2, grad_l1_lout = _C.rasterize_gaussians_backward(*args)
             except Exception as ex:
                 torch.save(cpu_args, "snapshot_bw.dump")
                 print("\nAn error occured in backward. Writing snapshot_bw.dump for debugging.\n")
                 raise ex
         else:
-             grad_means2D, grad_colors_precomp, grad_opacities, grad_means3D, grad_cov3Ds_precomp, grad_sh, grad_scales, grad_rotations = _C.rasterize_gaussians_backward(*args)
+             grad_means2D, grad_colors_precomp, grad_opacities, grad_means3D, grad_cov3Ds_precomp, grad_scales, grad_rotations, \
+                grad_l1_lw, grad_l1_mg, grad_l1_lw2, grad_l1_lout = _C.rasterize_gaussians_backward(*args)
 
         grads = (
             grad_means3D,
             grad_means2D,
-            grad_sh,
             grad_colors_precomp,
             grad_opacities,
             grad_scales,
             grad_rotations,
+            grad_l1_lw, grad_l1_mg, grad_l1_lw2, grad_l1_lout,
             grad_cov3Ds_precomp,
             None,
         )
@@ -185,7 +201,7 @@ class GaussianRasterizer(nn.Module):
             
         return visible
 
-    def forward(self, means3D, means2D, opacities, shs = None, colors_precomp = None, scales = None, rotations = None, cov3D_precomp = None):
+    def forward(self, means3D, means2D, opacities, colors_precomp = None, scales = None, rotations = None, cov3D_precomp = None, neural_params = None):
         
         raster_settings = self.raster_settings
 
@@ -207,16 +223,20 @@ class GaussianRasterizer(nn.Module):
         if cov3D_precomp is None:
             cov3D_precomp = torch.Tensor([]).cuda()
         
+        l1_lw, l1_mg, l2_lw2, lout_lw = neural_params
 
         # Invoke C++/CUDA rasterization routine
         return rasterize_gaussians(
             means3D,
             means2D,
-            shs,
             colors_precomp,
             opacities,
             scales, 
             rotations,
+            l1_lw,
+            l1_mg,
+            l2_lw2,
+            lout_lw,
             cov3D_precomp,
             raster_settings, 
         )

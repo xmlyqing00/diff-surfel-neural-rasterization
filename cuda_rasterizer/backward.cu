@@ -580,11 +580,10 @@ __device__ void compute_transmat_aabb(
 
 template<int C>
 __global__ void preprocessCUDA(
-	int P, int D, int M,
+	int P, 
 	const float3* means3D,
 	const float* transMats,
 	const int* radii,
-	const float* shs,
 	const bool* clamped,
 	const glm::vec2* scales,
 	const glm::vec4* rotations,
@@ -600,7 +599,6 @@ __global__ void preprocessCUDA(
 	float* dL_dtransMats,
 	const float* dL_dnormal3Ds,
 	float* dL_dcolors,
-	float* dL_dshs,
 	float3* dL_dmean2Ds,
 	glm::vec3* dL_dmean3Ds,
 	glm::vec2* dL_dscales,
@@ -625,9 +623,6 @@ __global__ void preprocessCUDA(
 		dL_dscales, 
 		dL_drots
 	);
-
-	if (shs)
-		computeColorFromSH(idx, D, M, (glm::vec3*)means3D, *campos, shs, clamped, (glm::vec3*)dL_dcolors, (glm::vec3*)dL_dmean3Ds, (glm::vec3*)dL_dshs);
 	
 	// hack the gradient here for densitification
 	float depth = transMats[idx * 9 + 8];
@@ -637,10 +632,9 @@ __global__ void preprocessCUDA(
 
 
 void BACKWARD::preprocess(
-	int P, int D, int M,
+	int P,
 	const float3* means3D,
 	const int* radii,
-	const float* shs,
 	const bool* clamped,
 	const glm::vec2* scales,
 	const glm::vec4* rotations,
@@ -655,17 +649,15 @@ void BACKWARD::preprocess(
 	const float* dL_dnormal3Ds,
 	float* dL_dtransMats,
 	float* dL_dcolors,
-	float* dL_dshs,
 	glm::vec3* dL_dmean3Ds,
 	glm::vec2* dL_dscales,
 	glm::vec4* dL_drots)
 {	
 	preprocessCUDA<NUM_CHANNELS><< <(P + 255) / 256, 256 >> > (
-		P, D, M,
+		P,
 		(float3*)means3D,
 		transMats,
 		radii,
-		shs,
 		clamped,
 		(glm::vec2*)scales,
 		(glm::vec4*)rotations,
@@ -680,7 +672,6 @@ void BACKWARD::preprocess(
 		dL_dtransMats,
 		dL_dnormal3Ds,
 		dL_dcolors,
-		dL_dshs,
 		dL_dmean2Ds,
 		dL_dmean3Ds,
 		dL_dscales,
