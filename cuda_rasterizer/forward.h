@@ -61,7 +61,7 @@ namespace FORWARD
 		const float* transMats,
 		const float* depths,
 		const float4* normal_opacity,
-		const Network& net,
+		const Network* net,
 		float* final_T,
 		uint32_t* n_contrib,
 		const float* bg_color,

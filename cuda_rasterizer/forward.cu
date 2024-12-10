@@ -151,7 +151,7 @@ __global__ void preprocessCUDA(int P,
 	const glm::vec2* scales,
 	const float scale_modifier,
 	const glm::vec4* rotations,
-<	const float* opacities,
+	const float* opacities,
 	bool* clamped,
 	const float* transMat_precomp,
 	const float* colors_precomp,
@@ -252,17 +252,30 @@ __device__ void infer_rgbd(
 	const float2 & uv,
 	float * result,
 	int idx,
-	const Network& net
+	const Network* net,
+	bool debug
 ) {
-	// auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
-	// torch::Tensor uv = torch::from_blob(&uv_, {2});
-	// float l1_weight[hidden_dim * input_dim];
-	// float l1_bias[hidden_dim];
-	// net.get_params(idx, l1_weight, l1_bias);
+	float l1_weight[hidden_dim * input_dim];
+	float l1_bias[hidden_dim];
+	float lout_weight[output_dim * hidden_dim];
+	float lout_bias[output_dim];
+	net->get_params(idx, l1_weight, l1_bias, lout_weight, lout_bias);
 
-	// float linear_res[hidden_dim];
-	// float uv_[2] = {uv.x, uv.y};
-	// net.linear(uv_, linear_res, l1_weight, l1_bias, input_dim, hidden_dim);
+	if (debug) {
+		for (int i = 0; i < hidden_dim * input_dim; i++) {
+			printf("l1_weight[%d]: %f\n", i, l1_weight[i]);
+		}
+		for (size_t i = 0; i < hidden_dim; i++)
+		{
+			printf("l1_bias[%d]: %f\n", i, l1_bias[i]);
+		}
+		
+	}
+	float linear_res[hidden_dim];
+	float uv_[2] = {uv.y, uv.y};
+	net->linear(uv_, linear_res, l1_weight, l1_bias, input_dim, hidden_dim);
+	net->relu(linear_res, hidden_dim);
+	net->linear(linear_res, result, lout_weight, lout_bias, hidden_dim, output_dim);
 
 	// torch::Tensor uv = net.l1_lw.index({idx});
 	// torch::Tensor l1_lw = net.l1_lw.index({idx});
@@ -306,7 +319,7 @@ renderCUDA(
 	const float* __restrict__ transMats,
 	const float* __restrict__ depths,
 	const float4* __restrict__ normal_opacity,
-	const Network& __restrict__ net,
+	const Network* __restrict__ net,
 	float* __restrict__ final_T,
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
@@ -323,7 +336,7 @@ renderCUDA(
 	float2 pixf = { (float)pix.x, (float)pix.y};
 
 	// Check if this thread is associated with a valid pixel or outside.
-	bool inside = pix.x < W&& pix.y < H;
+	bool inside = pix.x < W && pix.y < H;
 	// Done threads can help with fetching, but don't rasterize
 	bool done = !inside;
 
@@ -344,7 +357,7 @@ renderCUDA(
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
-	float C[NUM_CHANNELS + 1] = { 0 };
+	float C[COLOR_CHANNELS + 1] = { 0 };
 
 
 #if RENDER_AXUTILITY
@@ -388,6 +401,11 @@ renderCUDA(
 			// Keep track of current position in range
 			contributor++;
 
+			// printf("try to access net in forward.h renderCuda.\n");
+			// printf("net: %p\n", net);
+			// printf("l1_lw: %p\n", net->l1_lw);
+			// printf("l1_lw[%d]: %f\n", 0, net->l1_lw[0]);
+
 			// Fisrt compute two homogeneous planes, See Eq. (8)
 			const float2 xy = collected_xy[j];
 			const float3 Tu = collected_Tu[j];
@@ -405,7 +423,14 @@ renderCUDA(
 			// Add low pass filter
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
 			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
-			float rho = min(rho3d, rho2d);
+
+			// float rho = min(rho3d, rho2d);
+			float rho = rho3d;
+			float2 uv = s;
+			if (rho3d > rho2d) { 
+				uv = {FilterInv * d.x, FilterInv * d.y};
+				rho = rho2d;
+			}
 
 			// compute depth
 			float depth = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
@@ -457,11 +482,21 @@ renderCUDA(
 #endif
 
 			// Eq. (3) from 3D Gaussian splatting paper.
-			// for (int ch = 0; ch < NUM_CHANNELS; ch++) {
-				// C[ch] += features[collected_id[j] * NUM_CHANNELS + ch] * w;
+			// for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
+				// C[ch] += features[collected_id[j] * COLOR_CHANNELS + ch] * w;
 			// }
-			infer_rgbd(s, C, collected_id[j], net);
-				
+			if (pix.x == 250 && pix.y == 250) {
+				infer_rgbd(uv, C, collected_id[j], net, true);
+
+				printf("uv: %f, %f\n", uv.x, uv.y);
+				for (int ch = 0; ch < 3; ch++) {
+					printf("C[%d]: %f; ", ch, C[ch]);
+				}
+				printf("\n");
+			} else {
+				infer_rgbd(uv, C, collected_id[j], net, false);
+			}
+
 			T = test_T;
 
 			// Keep track of last range entry to update this
@@ -476,7 +511,7 @@ renderCUDA(
 	{
 		final_T[pix_id] = T;
 		n_contrib[pix_id] = last_contributor;
-		for (int ch = 0; ch < NUM_CHANNELS; ch++)
+		for (int ch = 0; ch < COLOR_CHANNELS; ch++)
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
 
 #if RENDER_AXUTILITY
@@ -504,14 +539,14 @@ void FORWARD::render(
 	const float* transMats,
 	const float* depths,
 	const float4* normal_opacity,
-	const Network& net,
+	const Network* net,
 	float* final_T,
 	uint32_t* n_contrib,
 	const float* bg_color,
 	float* out_color,
 	float* out_others)
 {
-	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
+	renderCUDA<COLOR_CHANNELS> << <grid, block >> > (
 		ranges,
 		point_list,
 		W, H,
@@ -554,7 +589,7 @@ void FORWARD::preprocess(int P,
 	uint32_t* tiles_touched,
 	bool prefiltered)
 {
-	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
+	preprocessCUDA<COLOR_CHANNELS> << <(P + 255) / 256, 256 >> > (
 		P, 
 		means3D,
 		scales,

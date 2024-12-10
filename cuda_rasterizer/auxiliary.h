@@ -34,19 +34,11 @@
 // #define FAR_PLANE 100.0
 #define DETACH_WEIGHT 0
 
-typedef long long ll;
-const int input_dim = 2;
-const int hidden_dim = 8;
-const int output_dim = 4;
-const ll l1_lw_len = input_dim * hidden_dim + hidden_dim;
-const ll l1_mg_len = input_dim * hidden_dim + hidden_dim;
-const ll l1_lw2_len = hidden_dim * hidden_dim + hidden_dim;
-const ll lout_lw_len = hidden_dim * output_dim + output_dim;
-
 __device__ const float near_n = 0.2;
 __device__ const float far_n = 100.0;
 __device__ const float FilterSize = 0.707106; // sqrt(2) / 2
 __device__ const float FilterInvSquare = 2.0f;
+__device__ const float FilterInv = 1.41421f;
 
 // Spherical harmonics coefficients
 __device__ const float SH_C0 = 0.28209479177387814f;

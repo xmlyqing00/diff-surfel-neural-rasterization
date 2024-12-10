@@ -17,8 +17,8 @@
 #include <cuda.h>
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
-// #include <cub/cub.cuh>
-// #include <cub/device/device_radix_sort.cuh>
+#include <cub/cub.cuh>
+#include <cub/device/device_radix_sort.cuh>
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
 
@@ -163,7 +163,7 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 	obtain(chunk, geom.normal_opacity, P, 128);
 	obtain(chunk, geom.rgb, P * 3, 128);
 	obtain(chunk, geom.tiles_touched, P, 128);
-	// cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, P);
+	cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, P);
 	obtain(chunk, geom.scanning_space, geom.scan_size, 128);
 	obtain(chunk, geom.point_offsets, P, 128);
 	return geom;
@@ -185,10 +185,10 @@ CudaRasterizer::BinningState CudaRasterizer::BinningState::fromChunk(char*& chun
 	obtain(chunk, binning.point_list_unsorted, P, 128);
 	obtain(chunk, binning.point_list_keys, P, 128);
 	obtain(chunk, binning.point_list_keys_unsorted, P, 128);
-	// cub::DeviceRadixSort::SortPairs(
-	// 	nullptr, binning.sorting_size,
-	// 	binning.point_list_keys_unsorted, binning.point_list_keys,
-	// 	binning.point_list_unsorted, binning.point_list, P);
+	cub::DeviceRadixSort::SortPairs(
+		nullptr, binning.sorting_size,
+		binning.point_list_keys_unsorted, binning.point_list_keys,
+		binning.point_list_unsorted, binning.point_list, P);
 	obtain(chunk, binning.list_sorting_space, binning.sorting_size, 128);
 	return binning;
 }
@@ -208,7 +208,7 @@ int CudaRasterizer::Rasterizer::forward(
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
-	const Network& net,
+	const Network* net,
 	const float* transMat_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
@@ -269,7 +269,7 @@ int CudaRasterizer::Rasterizer::forward(
 
 	// Compute prefix sum over full list of touched tile counts by Gaussians
 	// E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
-	// CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, P), debug)
+	CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, P), debug)
 
 	// Retrieve total number of Gaussian instances to launch and resize aux buffers
 	int num_rendered;
@@ -279,7 +279,6 @@ int CudaRasterizer::Rasterizer::forward(
 	char* binning_chunkptr = binningBuffer(binning_chunk_size);
 	BinningState binningState = BinningState::fromChunk(binning_chunkptr, num_rendered);
 
-	/*
 	// For each instance to be rendered, produce adequate [ tile | depth ] key 
 	// and corresponding dublicated Gaussian indices to be sorted
 	duplicateWithKeys << <(P + 255) / 256, 256 >> > (
@@ -312,7 +311,7 @@ int CudaRasterizer::Rasterizer::forward(
 			binningState.point_list_keys,
 			imgState.ranges);
 	CHECK_CUDA(, debug)
-	*/
+	
 	// Let each tile blend its range of Gaussians independently in parallel
 	const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
 	const float* transMat_ptr = transMat_precomp != nullptr ? transMat_precomp : geomState.transMat;
@@ -348,7 +347,7 @@ void CudaRasterizer::Rasterizer::backward(
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
-	const Network& net,
+	const Network* net,
 	const float* transMat_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
@@ -368,6 +367,7 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dtransMat,
 	float* dL_dscale,
 	float* dL_drot,
+	NetworkGrad * net_grad,
 	bool debug)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
@@ -401,6 +401,7 @@ void CudaRasterizer::Rasterizer::backward(
 		background,
 		geomState.means2D,
 		geomState.normal_opacity,
+		net,
 		color_ptr,
 		transMat_ptr,
 		depth_ptr,
@@ -412,7 +413,9 @@ void CudaRasterizer::Rasterizer::backward(
 		(float3*)dL_dmean2D,
 		dL_dnormal,
 		dL_dopacity,
-		dL_dcolor), debug)
+		dL_dcolor,
+		net_grad
+		), debug)
 
 	// Take care of the rest of preprocessing. Was the precomputed covariance
 	// given to us or a scales/rot pair? If precomputed, pass that. If not,
