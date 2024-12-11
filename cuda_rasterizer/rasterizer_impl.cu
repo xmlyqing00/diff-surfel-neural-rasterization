@@ -208,7 +208,7 @@ int CudaRasterizer::Rasterizer::forward(
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
-	const Network* net,
+	const Params* params,
 	const float* transMat_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
@@ -326,7 +326,7 @@ int CudaRasterizer::Rasterizer::forward(
 		transMat_ptr,
 		geomState.depths,
 		geomState.normal_opacity,
-		net,
+		params,
 		imgState.accum_alpha,
 		imgState.n_contrib,
 		background,
@@ -347,7 +347,6 @@ void CudaRasterizer::Rasterizer::backward(
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
-	const Network* net,
 	const float* transMat_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
@@ -367,7 +366,7 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dtransMat,
 	float* dL_dscale,
 	float* dL_drot,
-	NetworkGrad * net_grad,
+	Params * params,
 	bool debug)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
@@ -401,7 +400,6 @@ void CudaRasterizer::Rasterizer::backward(
 		background,
 		geomState.means2D,
 		geomState.normal_opacity,
-		net,
 		color_ptr,
 		transMat_ptr,
 		depth_ptr,
@@ -414,7 +412,7 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dnormal,
 		dL_dopacity,
 		dL_dcolor,
-		net_grad
+		params
 		), debug)
 
 	// Take care of the rest of preprocessing. Was the precomputed covariance

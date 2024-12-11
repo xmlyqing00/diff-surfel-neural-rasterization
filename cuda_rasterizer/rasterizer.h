@@ -44,7 +44,7 @@ namespace CudaRasterizer
 			const float* scales,
 			const float scale_modifier,
 			const float* rotations,
-			const Network* net,
+			const Params* params,
 			const float* transMat_precomp,
 			const float* viewmatrix,
 			const float* projmatrix,
@@ -65,7 +65,6 @@ namespace CudaRasterizer
 			const float* scales,
 			const float scale_modifier,
 			const float* rotations,
-			const Network* net,
 			const float* transMat_precomp,
 			const float* viewmatrix,
 			const float* projmatrix,
@@ -85,7 +84,7 @@ namespace CudaRasterizer
 			float* dL_dtransMat,
 			float* dL_dscale,
 			float* dL_drot,
-			NetworkGrad* net_grad,
+			Params* params,
 			bool debug);
 	};
 };

@@ -102,10 +102,11 @@ RasterizeGaussiansCUDA(
   std::function<char*(size_t)> binningFunc = resizeFunctional(binningBuffer);
   std::function<char*(size_t)> imgFunc = resizeFunctional(imgBuffer);
 
-  Network net_host(l1_lw, l1_mg, l1_lw2, lout_lw);
-  Network* net;
-  cudaMalloc(&net, sizeof(Network));
-  cudaMemcpy(net, &net_host, sizeof(Network), cudaMemcpyHostToDevice);
+  Params params_host;
+  params_host.set_params(l1_lw, l1_mg, l1_lw2, lout_lw);
+  Params* params;
+  cudaMalloc(&params, sizeof(Params));
+  cudaMemcpy(params, &params_host, sizeof(Params), cudaMemcpyHostToDevice);
   
   int rendered = 0;
   if(P != 0)
@@ -124,7 +125,7 @@ RasterizeGaussiansCUDA(
 		scales.contiguous().data_ptr<float>(),
 		scale_modifier,
 		rotations.contiguous().data_ptr<float>(),
-		net,
+		params,
 		transMat_precomp.contiguous().data<float>(), 
 		viewmatrix.contiguous().data<float>(), 
 		projmatrix.contiguous().data<float>(),
@@ -138,7 +139,7 @@ RasterizeGaussiansCUDA(
 		debug);
   }
 
-  cudaFree(net);
+  cudaFree(params);
 
   return std::make_tuple(rendered, out_color, out_others, radii, geomBuffer, binningBuffer, imgBuffer);
 }
@@ -206,30 +207,12 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   torch::Tensor dL_l1_lw2 = torch::zeros({P, hidden_dim + 1, hidden_dim}, means3D.options());
   torch::Tensor dL_lout_lw = torch::zeros({P, hidden_dim + 1, output_dim}, means3D.options());
 
-  
-  Network net_host(l1_lw, l1_mg, l1_lw2, lout_lw);
-  Network* net;
-  cudaMalloc(&net, sizeof(Network));
-  cudaMemcpy(net, &net_host, sizeof(Network), cudaMemcpyHostToDevice);
-
-  NetworkGrad net_grad_host(dL_l1_lw, dL_l1_mg, dL_l1_lw2, dL_lout_lw);
-  NetworkGrad* net_grad;
-  cudaMalloc(&net_grad, sizeof(NetworkGrad));
-  cudaMemcpy(net_grad, &net_grad_host, sizeof(NetworkGrad), cudaMemcpyHostToDevice);
-
-	// NetworkGrad * net_grad;
-	// cudaMalloc(&net_grad, sizeof(NetworkGrad));
-	// printf("malloc successed.\n");
-	// net_grad->set_grads(
-	// 	dL_l1_lw.contiguous().data_ptr<float>(),
-	// 	dL_l1_mg.contiguous().data_ptr<float>(),
-	// 	dL_l1_lw2.contiguous().data_ptr<float>(),
-	// 	dL_lout_lw.contiguous().data_ptr<float>()
-	// );
-	// printf("here");
-	// printf("net_grad at rasterize_points.cu: %p\n", &net_grad);
-	// printf("net_grad.dL_l1_lw at rasterize_points.cu: %p\n", net_grad.dL_l1_lw);
-
+  Params params_host;
+  params_host.set_params(l1_lw, l1_mg, l1_lw2, lout_lw);
+  params_host.set_grads(dL_l1_lw, dL_l1_mg, dL_l1_lw2, dL_lout_lw);
+  Params* params;
+  cudaMalloc(&params, sizeof(Params));
+  cudaMemcpy(params, &params_host, sizeof(Params), cudaMemcpyHostToDevice);
 
   if(P != 0)
   {  
@@ -241,7 +224,6 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  scales.data_ptr<float>(),
 	  scale_modifier,
 	  rotations.data_ptr<float>(),
-	  net,
 	  transMat_precomp.contiguous().data<float>(),
 	  viewmatrix.contiguous().data<float>(),
 	  projmatrix.contiguous().data<float>(),
@@ -262,12 +244,11 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  dL_dtransMat.contiguous().data<float>(),
 	  dL_dscales.contiguous().data<float>(),
 	  dL_drotations.contiguous().data<float>(),
-	  net_grad,
+	  params,
 	  debug);
   }
 
-  cudaFree(net);
-  cudaFree(net_grad);
+  cudaFree(params);
 
   return std::make_tuple(
 	dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dtransMat, dL_dscales, dL_drotations,

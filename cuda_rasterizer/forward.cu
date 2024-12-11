@@ -248,62 +248,6 @@ __global__ void preprocessCUDA(int P,
 }
 
 
-__device__ void infer_rgbd(
-	const float2 & uv,
-	float * result,
-	int idx,
-	const Network* net,
-	bool debug
-) {
-	float l1_weight[hidden_dim * input_dim];
-	float l1_bias[hidden_dim];
-	float lout_weight[output_dim * hidden_dim];
-	float lout_bias[output_dim];
-	net->get_params(idx, l1_weight, l1_bias, lout_weight, lout_bias);
-
-	if (debug) {
-		for (int i = 0; i < hidden_dim * input_dim; i++) {
-			printf("l1_weight[%d]: %f\n", i, l1_weight[i]);
-		}
-		for (size_t i = 0; i < hidden_dim; i++)
-		{
-			printf("l1_bias[%d]: %f\n", i, l1_bias[i]);
-		}
-		
-	}
-	float linear_res[hidden_dim];
-	float uv_[2] = {uv.y, uv.y};
-	net->linear(uv_, linear_res, l1_weight, l1_bias, input_dim, hidden_dim);
-	net->relu(linear_res, hidden_dim);
-	net->linear(linear_res, result, lout_weight, lout_bias, hidden_dim, output_dim);
-
-	// torch::Tensor uv = net.l1_lw.index({idx});
-	// torch::Tensor l1_lw = net.l1_lw.index({idx});
-	// torch::Tensor l1_mg = net.l1_mg.index({idx}); 
-	// torch::Tensor l1_lw2 = net.l1_lw2.index({idx});
-	// torch::Tensor lout_lw = net.lout_lw.index({idx});
-
-	// torch::Tensor l1_weight = l1_lw.index({Slice(None, l1_lw_len - hidden_dim)}).reshape({hidden_dim, input_dim});
-	// torch::Tensor l1_bias = l1_lw.index({Slice(l1_lw_len - hidden_dim, None)});
-	// torch::Tensor l1_mu = l1_mg.index({Slice(None, l1_mg_len - hidden_dim)}).reshape({hidden_dim, input_dim});
-	// torch::Tensor l1_gamma = l1_mg.index({Slice(l1_mg_len - hidden_dim, None)});
-	// torch::Tensor l1_weight2 = l1_lw2.index({Slice(None, l1_lw2_len - hidden_dim)}).reshape({hidden_dim, hidden_dim});
-	// torch::Tensor l1_bias2 = l1_lw2.index({Slice(l1_lw2_len - hidden_dim, None)});
-	// torch::Tensor lout_weight = lout_lw.index({Slice(None, lout_lw_len - hidden_dim)}).reshape({output_dim, hidden_dim});
-	// torch::Tensor lout_bias = lout_lw.index({Slice(lout_lw_len - hidden_dim, None)});
-
-	// torch::Tensor linear = matmul(l1_weight, uv) + l1_bias;
-	// torch::Tensor D = torch::sum(torch::square(uv), 1) + torch::sum(torch::square(l1_mu), 1) - 2 * matmul(uv, l1_mu.transpose(1, 0));
-	// torch::Tensor sin_result = sin(linear);
-	// torch::Tensor exp_result = exp(-0.5 * D * l1_gamma);
-	// torch::Tensor layer_result = sin_result * exp_result;
-	// torch::Tensor linear2 = matmul(l1_weight2, layer_result) + l1_bias2;
-	// torch::Tensor out = matmul(lout_weight, linear2) + lout_bias;
-
-	// result = linear_res;
-}
-
-
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
 // and rasterizing data.
@@ -319,7 +263,7 @@ renderCUDA(
 	const float* __restrict__ transMats,
 	const float* __restrict__ depths,
 	const float4* __restrict__ normal_opacity,
-	const Network* __restrict__ net,
+	const Params* __restrict__ params,
 	float* __restrict__ final_T,
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
@@ -485,16 +429,16 @@ renderCUDA(
 			// for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
 				// C[ch] += features[collected_id[j] * COLOR_CHANNELS + ch] * w;
 			// }
+			Network net;
+			params->get_params(collected_id[j], net, false);
+			float uv_[2] = {uv.x, uv.y};
+			net.forward(uv_, C);
 			if (pix.x == 250 && pix.y == 250) {
-				infer_rgbd(uv, C, collected_id[j], net, true);
-
 				printf("uv: %f, %f\n", uv.x, uv.y);
 				for (int ch = 0; ch < 3; ch++) {
 					printf("C[%d]: %f; ", ch, C[ch]);
 				}
 				printf("\n");
-			} else {
-				infer_rgbd(uv, C, collected_id[j], net, false);
 			}
 
 			T = test_T;
@@ -539,7 +483,7 @@ void FORWARD::render(
 	const float* transMats,
 	const float* depths,
 	const float4* normal_opacity,
-	const Network* net,
+	const Params * params,
 	float* final_T,
 	uint32_t* n_contrib,
 	const float* bg_color,
@@ -556,7 +500,7 @@ void FORWARD::render(
 		transMats,
 		depths,
 		normal_opacity,
-		net,
+		params,
 		final_T,
 		n_contrib,
 		bg_color,

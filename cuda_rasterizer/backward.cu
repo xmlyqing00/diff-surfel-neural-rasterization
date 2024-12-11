@@ -139,42 +139,6 @@ __device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const glm::
 }
 
 
-__device__ void infer_rgbd_grad(
-	const float2 & uv,
-	NetworkGrad* net_grad,
-	int idx,
-	const Network* net,
-	const float * dL_dcolor
-) {
-
-	float uv_[2] = {uv.y, uv.y};
-	net_grad->grad(uv_, idx, dL_dcolor, net);
-
-	// torch::Tensor uv = net.l1_lw.index({idx});
-	// torch::Tensor l1_lw = net.l1_lw.index({idx});
-	// torch::Tensor l1_mg = net.l1_mg.index({idx}); 
-	// torch::Tensor l1_lw2 = net.l1_lw2.index({idx});
-	// torch::Tensor lout_lw = net.lout_lw.index({idx});
-
-	// torch::Tensor l1_weight = l1_lw.index({Slice(None, l1_lw_len - hidden_dim)}).reshape({hidden_dim, input_dim});
-	// torch::Tensor l1_bias = l1_lw.index({Slice(l1_lw_len - hidden_dim, None)});
-	// torch::Tensor l1_mu = l1_mg.index({Slice(None, l1_mg_len - hidden_dim)}).reshape({hidden_dim, input_dim});
-	// torch::Tensor l1_gamma = l1_mg.index({Slice(l1_mg_len - hidden_dim, None)});
-	// torch::Tensor l1_weight2 = l1_lw2.index({Slice(None, l1_lw2_len - hidden_dim)}).reshape({hidden_dim, hidden_dim});
-	// torch::Tensor l1_bias2 = l1_lw2.index({Slice(l1_lw2_len - hidden_dim, None)});
-	// torch::Tensor lout_weight = lout_lw.index({Slice(None, lout_lw_len - hidden_dim)}).reshape({output_dim, hidden_dim});
-	// torch::Tensor lout_bias = lout_lw.index({Slice(lout_lw_len - hidden_dim, None)});
-
-	// torch::Tensor linear = matmul(l1_weight, uv) + l1_bias;
-	// torch::Tensor D = torch::sum(torch::square(uv), 1) + torch::sum(torch::square(l1_mu), 1) - 2 * matmul(uv, l1_mu.transpose(1, 0));
-	// torch::Tensor sin_result = sin(linear);
-	// torch::Tensor exp_result = exp(-0.5 * D * l1_gamma);
-	// torch::Tensor layer_result = sin_result * exp_result;
-	// torch::Tensor linear2 = matmul(l1_weight2, layer_result) + l1_bias2;
-	// torch::Tensor out = matmul(lout_weight, linear2) + lout_bias;
-}
-
-
 // Backward version of the rendering procedure.
 template <uint32_t C>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
@@ -186,7 +150,6 @@ renderCUDA(
 	const float* __restrict__ bg_color,
 	const float2* __restrict__ points_xy_image,
 	const float4* __restrict__ normal_opacity,
-	const Network* __restrict__ net,
 	const float* __restrict__ transMats,
 	const float* __restrict__ colors,
 	const float* __restrict__ depths,
@@ -199,7 +162,7 @@ renderCUDA(
 	float* __restrict__ dL_dnormal3D,
 	float* __restrict__ dL_dopacity,
 	float* __restrict__ dL_dcolors,
-	NetworkGrad* __restrict__ net_grad
+	Params* __restrict__ params
 	)
 {
 	// We rasterize again. Compute necessary block info.
@@ -397,7 +360,15 @@ renderCUDA(
 				
 
 			// backpropagate the gradients to the network
-			infer_rgbd_grad(uv, net_grad, collected_id[j], net, dL_dcolor);
+			Network net;
+			params->get_params(collected_id[j], net, true);
+			float uv_[2] = {uv.y, uv.y};
+			float dL_uv[2] = {0};
+			net.backward(uv_, dL_dcolor, dL_uv);
+			if (pix.x == 250 && pix.y == 250) {
+				// printf("BLOCK %d %d", BLOCK_X, BLOCK_Y);
+				printf("backward done. dL_uv = {%f %f}\n", dL_uv[0], dL_uv[1]);
+			}
 
 			// if (block.thread_rank() == 0) {
 			// 	printf("infer_rgbd_grad done.\n");
@@ -464,8 +435,8 @@ renderCUDA(
 			if (rho3d <= rho2d) {
 				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
 				const float2 dL_ds = {
-					dL_dG * -G * s.x + dL_dz * Tw.x,
-					dL_dG * -G * s.y + dL_dz * Tw.y
+					dL_dG * -G * s.x + dL_dz * Tw.x + dL_uv[0],  // add dL_uv[0] to dL_ds.x
+					dL_dG * -G * s.y + dL_dz * Tw.y + dL_uv[1]   // add dL_uv[1] to dL_ds.y
 				};
 				const float3 dz_dTw = {s.x, s.y, 1.0};
 				const float dsx_pz = dL_ds.x / p.z;
@@ -493,12 +464,16 @@ renderCUDA(
 				atomicAdd(&dL_dtransMat[global_id * 9 + 7],  dL_dTw.y);
 				atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dTw.z);
 			} else {
-				// // Update gradients w.r.t. center of Gaussian 2D mean position
-				const float dG_ddelx = -G * FilterInvSquare * d.x;
-				const float dG_ddely = -G * FilterInvSquare * d.y;
-				atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); // not scaled
-				atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely); // not scaled
-				// // Propagate the gradients of depth
+				// Update gradients w.r.t. center of Gaussian 2D mean position
+				// const float dG_ddelx = -G * FilterInvSquare * d.x;
+				// const float dG_ddely = -G * FilterInvSquare * d.y;
+				// atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); // not scaled
+				// atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely); // not scaled
+				// change to dL_uv
+				atomicAdd(&dL_dmean2D[global_id].x, dL_uv[0]); 
+				atomicAdd(&dL_dmean2D[global_id].y, dL_uv[1]); 
+				
+				// Propagate the gradients of depth
 				atomicAdd(&dL_dtransMat[global_id * 9 + 6],  s.x * dL_dz);
 				atomicAdd(&dL_dtransMat[global_id * 9 + 7],  s.y * dL_dz);
 				atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dz);
@@ -753,7 +728,6 @@ void BACKWARD::render(
 	const float* bg_color,
 	const float2* means2D,
 	const float4* normal_opacity,
-	const Network * net,
 	const float* colors,
 	const float* transMats,
 	const float* depths,
@@ -766,7 +740,7 @@ void BACKWARD::render(
 	float* dL_dnormal3D,
 	float* dL_dopacity,
 	float* dL_dcolors,
-	NetworkGrad * net_grad
+	Params * params
 ) {
 	renderCUDA<COLOR_CHANNELS> << <grid, block >> >(
 		ranges,
@@ -776,7 +750,6 @@ void BACKWARD::render(
 		bg_color,
 		means2D,
 		normal_opacity,
-		net,
 		transMats,
 		colors,
 		depths,
@@ -789,6 +762,6 @@ void BACKWARD::render(
 		dL_dnormal3D,
 		dL_dopacity,
 		dL_dcolors,
-		net_grad
+		params
 	);
 }
