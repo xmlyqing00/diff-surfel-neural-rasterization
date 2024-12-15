@@ -36,91 +36,108 @@ public:
 
 	__device__ void forward(const float * input, float * output) const {
 
-		float l1_out[hidden_dim];
-		linear(input, l1_out, l1_weight, l1_bias, input_dim, hidden_dim);
-		relu(l1_out, l1_out, hidden_dim);
+		// float l1_out[hidden_dim];
+		// linear(input, l1_out, l1_weight, l1_bias, input_dim, hidden_dim);
+		// relu(l1_out, l1_out, hidden_dim);
 
-		float l1_out2[hidden_dim];
-		linear(l1_out, l1_out2, l1_weight2, l1_bias2, hidden_dim, hidden_dim);
-		relu(l1_out2, l1_out2, hidden_dim);
+		// float l1_out2[hidden_dim];
+		// linear(l1_out, l1_out2, l1_weight2, l1_bias2, hidden_dim, hidden_dim);
+		// relu(l1_out2, l1_out2, hidden_dim);
 
-		linear(l1_out2, output, lout_weight, lout_bias, hidden_dim, output_dim);
+		// linear(l1_out2, output, lout_weight, lout_bias, hidden_dim, output_dim);
+
+		linear(input, output, l1_weight, l1_bias, input_dim, hidden_dim);
 	}
 
-	__device__ void backward(const float * input, const float * dL_out, float * dL_input) {
-
-		// forward
-		float l1_out[hidden_dim];
-		linear(input, l1_out, l1_weight, l1_bias, input_dim, hidden_dim);
-		float l1_out_act[hidden_dim];
-		relu(l1_out, l1_out_act, hidden_dim);
-
-		float l1_out2[hidden_dim];
-		linear(l1_out_act, l1_out2, l1_weight2, l1_bias2, hidden_dim, hidden_dim);
-		float l1_out2_act[hidden_dim];
-		relu(l1_out2, l1_out2_act, hidden_dim);
+	__device__ void backward(
+		const float * input, const float * dL_dcolor, float * dL_input,
+		const bool debug
+	) {
 
 		// gradient for output layer
-		for (int i = 0; i < output_dim; i++) {
-			atomicAdd(dL_lout_bias+i, dL_out[i]);
+		for (int i = 0; i < output_dim; ++i) {
+			atomicAdd(dL_l1_bias+i, dL_dcolor[i]);
 		}
-		for (int i = 0; i < hidden_dim; i++) {
-			for (int j = 0; j < output_dim; j++) {
-				atomicAdd(dL_lout_weight+ i * output_dim + j, dL_out[j] * l1_out2_act[i]);
-			}
-		}
-		float dL_l1_out2_act[hidden_dim];
-		for (int i = 0; i < hidden_dim; i++) {
-			dL_l1_out2_act[i] = 0;
-			for (int j = 0; j < output_dim; j++) {
-				dL_l1_out2_act[i] += dL_out[j] * lout_weight[i * output_dim + j];
-			}
-		}
-
-		// gradient for relu
-		float dL_l1_out2[hidden_dim];
-		for (int i = 0; i < hidden_dim; i++) {
-			dL_l1_out2[i] = l1_out2[i] > 0 ? dL_l1_out2_act[i] : 0;
-		}
-
-		// gradient for l1 layer 2
-		for (int i = 0; i < hidden_dim; i++) {
-			atomicAdd(dL_l1_bias2+i, dL_l1_out2[i]);
-		}
-		for (int i = 0; i < hidden_dim; i++) {
-			for (int j = 0; j < hidden_dim; j++) {
-				atomicAdd(dL_l1_weight2+ i * hidden_dim + j, dL_l1_out2[j] * l1_out_act[i]);
-			}
-		}
-		float dL_l1_out_act[hidden_dim];
-		for (int i = 0; i < hidden_dim; i++) {
-			dL_l1_out_act[i] = 0;
-			for (int j = 0; j < hidden_dim; j++) {
-				dL_l1_out_act[i] += dL_l1_out2[j] * l1_weight2[i * hidden_dim + j];
-			}
-		}
-
-		// gradient for relu
-		float dL_l1_out[hidden_dim];
-		for (int i = 0; i < hidden_dim; i++) {
-			dL_l1_out[i] = l1_out[i] > 0 ? dL_l1_out_act[i] : 0;
-		}
-
-		// gradient for l1 layer
-		for (int i = 0; i < hidden_dim; i++) {
-			atomicAdd(dL_l1_bias+i, dL_l1_out[i]);
-		}
-		for (int i = 0; i < input_dim; i++) {
-			for (int j = 0; j < hidden_dim; j++) {
-				atomicAdd(dL_l1_weight+ i * hidden_dim + j, dL_l1_out[j] * input[i]);
-			}
-		}
-		for (int i = 0; i < input_dim; i++) {
+		for (int i = 0; i < input_dim; ++i) {
 			dL_input[i] = 0;
-			for (int j = 0; j < hidden_dim; j++) {
-				dL_input[i] += dL_l1_out[j] * l1_weight[i * hidden_dim + j];
+			for (int j = 0; j < output_dim; ++j) {
+				atomicAdd(dL_l1_weight+ i * output_dim + j, dL_dcolor[j] * input[i]);
+				dL_input[i] += dL_dcolor[j] * l1_weight[i * output_dim + j];
 			}
 		}
+
+		// // forward
+		// float l1_out[hidden_dim];
+		// linear(input, l1_out, l1_weight, l1_bias, input_dim, hidden_dim);
+		// float l1_out_act[hidden_dim];
+		// relu(l1_out, l1_out_act, hidden_dim);
+
+		// float l1_out2[hidden_dim];
+		// linear(l1_out_act, l1_out2, l1_weight2, l1_bias2, hidden_dim, hidden_dim);
+		// float l1_out2_act[hidden_dim];
+		// relu(l1_out2, l1_out2_act, hidden_dim);
+
+		// // gradient for output layer
+		// for (int i = 0; i < output_dim; i++) {
+		// 	atomicAdd(dL_lout_bias+i, dL_dcolor[i]);
+		// }
+		// for (int i = 0; i < hidden_dim; i++) {
+		// 	for (int j = 0; j < output_dim; j++) {
+		// 		atomicAdd(dL_lout_weight+ i * output_dim + j, dL_dcolor[j] * l1_out2_act[i]);
+		// 	}
+		// }
+		// float dL_l1_out2_act[hidden_dim];
+		// for (int i = 0; i < hidden_dim; i++) {
+		// 	dL_l1_out2_act[i] = 0;
+		// 	for (int j = 0; j < output_dim; j++) {
+		// 		dL_l1_out2_act[i] += dL_dcolor[j] * lout_weight[i * output_dim + j];
+		// 	}
+		// }
+
+		// // gradient for relu
+		// float dL_l1_out2[hidden_dim];
+		// for (int i = 0; i < hidden_dim; i++) {
+		// 	dL_l1_out2[i] = l1_out2[i] > 0 ? dL_l1_out2_act[i] : 0;
+		// }
+
+		// // gradient for l1 layer 2
+		// for (int i = 0; i < hidden_dim; i++) {
+		// 	atomicAdd(dL_l1_bias2+i, dL_l1_out2[i]);
+		// }
+		// for (int i = 0; i < hidden_dim; i++) {
+		// 	for (int j = 0; j < hidden_dim; j++) {
+		// 		atomicAdd(dL_l1_weight2+ i * hidden_dim + j, dL_l1_out2[j] * l1_out_act[i]);
+		// 	}
+		// }
+		// float dL_l1_out_act[hidden_dim];
+		// for (int i = 0; i < hidden_dim; i++) {
+		// 	dL_l1_out_act[i] = 0;
+		// 	for (int j = 0; j < hidden_dim; j++) {
+		// 		dL_l1_out_act[i] += dL_l1_out2[j] * l1_weight2[i * hidden_dim + j];
+		// 	}
+		// }
+
+		// // gradient for relu
+		// float dL_l1_out[hidden_dim];
+		// for (int i = 0; i < hidden_dim; i++) {
+		// 	dL_l1_out[i] = l1_out[i] > 0 ? dL_l1_out_act[i] : 0;
+		// }
+
+		// // gradient for l1 layer
+		// for (int i = 0; i < hidden_dim; i++) {
+		// 	atomicAdd(dL_l1_bias+i, dL_l1_out[i]);
+		// }
+		// for (int i = 0; i < input_dim; i++) {
+		// 	for (int j = 0; j < hidden_dim; j++) {
+		// 		atomicAdd(dL_l1_weight+ i * hidden_dim + j, dL_l1_out[j] * input[i]);
+		// 	}
+		// }
+		// for (int i = 0; i < input_dim; i++) {
+		// 	dL_input[i] = 0;
+		// 	for (int j = 0; j < hidden_dim; j++) {
+		// 		dL_input[i] += dL_l1_out[j] * l1_weight[i * hidden_dim + j];
+		// 	}
+		// }
 
 	}
 
@@ -158,7 +175,6 @@ private:
 	int l1_mg_size = (input_dim + 1) * hidden_dim;
 	int l1_lw2_size = (hidden_dim + 1) * hidden_dim;
 	int lout_lw_size = (hidden_dim + 1) * output_dim;
-	int size_per_gauss = l1_lw_size + l1_mg_size + l1_lw2_size + lout_lw_size;
 
 	int l1_bias_start = input_dim * hidden_dim;
 	int l1_gamma_start = input_dim * hidden_dim;

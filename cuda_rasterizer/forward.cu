@@ -394,18 +394,35 @@ renderCUDA(
 			// Obtain alpha by multiplying with Gaussian opacity
 			// and its exponential falloff from mean.
 			// Avoid numerical instabilities (see paper appendix). 
-			float alpha = min(0.99f, opa * exp(power));
-			if (alpha < 1.0f / 255.0f)
-				continue;
-			opa = min(0.99f, opa);
-			float test_T = T * (1 - opa);  // alpha -> opa
+			const float G = exp(power);
+			// float alpha = opa;
+			// if (G < threshold_G) {
+			// 	alpha = opa * G / threshold_G;
+			// 	// alpha = -opa / (threshold_G ** 2) * G ** 2 + 2 * opa / threshold_G * G;
+			// }
+			float alpha = min(opa * G, 0.99f);
+			bool edge_flag = false;
+			if (alpha < threshold_G) {
+				alpha = opa * G / threshold_G;
+				edge_flag = true;
+			} else {
+				alpha = opa;
+			}
+			if (alpha < threshold_alpha) continue;
+
+			// float alpha = min(0.99f, opa * G);
+			// if (exp(power) < 1.0f / 255.0f)
+				// continue;
+			// const float alpha = min(0.99f, opa);
+
+			float test_T = T * (1 - alpha);
 			if (test_T < 0.0001f)
 			{
 				done = true;
 				continue;
 			}
 
-			float w = opa * T;  // alpha -> opa
+			float w = alpha * T;
 #if RENDER_AXUTILITY
 			// Render depth distortion map
 			// Efficient implementation of distortion loss, see 2DGS' paper appendix.
@@ -433,13 +450,16 @@ renderCUDA(
 			params->get_params(collected_id[j], net, false);
 			float uv_[2] = {uv.x, uv.y};
 			net.forward(uv_, C);
-			if (pix.x == 250 && pix.y == 250) {
-				printf("uv: %f, %f\n", uv.x, uv.y);
-				for (int ch = 0; ch < 3; ch++) {
-					printf("C[%d]: %f; ", ch, C[ch]);
-				}
-				printf("\n");
+			for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
+				C[ch] *= w;
 			}
+			// if (pix.x == 250 && pix.y == 250) {
+			// 	printf("uv: %f, %f\n", uv.x, uv.y);
+			// 	for (int ch = 0; ch < 3; ch++) {
+			// 		printf("C[%d]: %f; ", ch, C[ch]);
+			// 	}
+			// 	printf("w: %f\n", w);
+			// }
 
 			T = test_T;
 

@@ -320,10 +320,20 @@ renderCUDA(
 				continue;
 
 			const float G = exp(power);
+			// const float alpha = min(0.99f, opa * G);
+			// float alpha = opa;
+			// if (opa * G < threshold_G) alpha = opa * G / threshold_G;
 			float alpha = min(0.99f, opa * G);
-			if (alpha < 1.0f / 255.0f)
-				continue;
-			alpha = min(0.99f, alpha);
+			bool edge_flag = false;
+			if (alpha < threshold_G) {
+				alpha = opa * G / threshold_G;
+				edge_flag = true;
+			} else {
+				alpha = opa;
+			}
+			if (alpha < threshold_alpha) continue;
+			// if (G < 1.0f / 255.0f)
+			// const float alpha = min(0.99f, opa);
 
 			T = T / (1.f - alpha);
 			const float dchannel_dcolor = alpha * T;
@@ -348,27 +358,34 @@ renderCUDA(
 				// atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
 				dL_dcolor[ch] = dchannel_dcolor * dL_dchannel;
 			}
-			
-			
-			// if (block.thread_index().x == 0 && block.thread_index().y == 0) {
-			// 	printf("try to access net_grad in backward.h renderCuda.\n");
-			// 	printf("net_grad: %p\n", net_grad);
-			// 	// printf("net_grad dL_l1_lw: %p\n", net_grad.dL_l1_lw);
-			// 	printf("dL_l1_lw[%d]: %f\n", 0, net_grad->dL_l1_lw[0]);
-			// 	printf("dL_dcolor done. %.3f, %.3f, %.3f\n", dL_dcolor[0], dL_dcolor[1], dL_dcolor[2]);
-			// }
-				
 
 			// backpropagate the gradients to the network
 			Network net;
 			params->get_params(collected_id[j], net, true);
-			float uv_[2] = {uv.y, uv.y};
-			float dL_uv[2] = {0};
-			net.backward(uv_, dL_dcolor, dL_uv);
-			if (pix.x == 250 && pix.y == 250) {
-				// printf("BLOCK %d %d", BLOCK_X, BLOCK_Y);
-				printf("backward done. dL_uv = {%f %f}\n", dL_uv[0], dL_uv[1]);
-			}
+			float uv_[2] = {uv.x, uv.y};
+			float dL_duv[2] = {0};
+			// for (int tmpk = 0; tmpk < 3; tmpk++) {
+			// 	if (dL_dcolor[tmpk] > 0) {
+			// 		printf("pix.xy %d %d, dL_dcolor[%d] = %.8f\n", pix.x, pix.y, tmpk, dL_dcolor[tmpk]);
+			// 	}
+			// }
+			// if (dL_dcolor[1] > 0) {
+			// 	printf("pix.xy %d %d, dL_dcolor[1] = %.10f, dchannel_dcolor = %.8f, dL_dpixel[1] = %.8f \n", pix.x, pix.y, dL_dcolor[1], dchannel_dcolor, dL_dpixel[1]);
+			// 	printf("T %.8f alpha %.8f\n", T, alpha);
+
+			// }
+			net.backward(uv_, dL_dcolor, dL_duv, false);
+			// if (abs(int(pix.x - 250)) < 10 && abs(int(pix.y - 250)) < 10) {
+				
+			// 	printf("pix.x %d pix.y %d, dL_duv %.8f %.8f\n", pix.x, pix.y, dL_duv[0], dL_duv[1]);
+			// 	// printf("BLOCK %d %d", BLOCK_X, BLOCK_Y);
+			// 	// printf("backward done. dL_duv = {%f %f}\n", dL_duv[0], dL_duv[1]);
+			// 	// printf("alpha %f, T %f, dchannel_dcolor %f\n", alpha, T, dchannel_dcolor);
+			// 	// printf("dL_dpixel[ch] %.8f %.8f %.8f\n", dL_dpixel[0], dL_dpixel[1], dL_dpixel[2]);
+			// 	// printf("dL_dcolor %.8f %.8f %.8f\n", dL_dcolor[0], dL_dcolor[1], dL_dcolor[2]);
+			// } else {
+			// 	// net.backward(uv_, dL_dcolor, dL_duv, false);
+			// }
 
 			// if (block.thread_rank() == 0) {
 			// 	printf("infer_rgbd_grad done.\n");
@@ -426,17 +443,27 @@ renderCUDA(
 
 
 			// Helpful reusable temporary variables
-			// const float dL_dG = nor_o.w * dL_dalpha;
-			const float dL_dG = 0;
+			float dL_dG;
+			if (edge_flag) {
+				dL_dG = nor_o.w * dL_dalpha / threshold_G;
+			} else {
+				dL_dG = 0;
+			}
+			// dL_dG = 0;
+			// float dL_dG = nor_o.w * dL_dalpha;
+			// const float dL_dG = 0;
 #if RENDER_AXUTILITY
 			dL_dz += alpha * T * dL_ddepth; 
 #endif
 
 			if (rho3d <= rho2d) {
+				// if (pix.x == 250 && pix.y == 250) {
+				// 	printf("rho3d <= rho2d, rho3d = %f, rho2d = %f\n", rho3d, rho2d);
+				// }
 				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
 				const float2 dL_ds = {
-					dL_dG * -G * s.x + dL_dz * Tw.x + dL_uv[0],  // add dL_uv[0] to dL_ds.x
-					dL_dG * -G * s.y + dL_dz * Tw.y + dL_uv[1]   // add dL_uv[1] to dL_ds.y
+					dL_dG * -G * s.x + dL_dz * Tw.x, // + dL_duv[0],  // add dL_duv[0] to dL_ds.x
+					dL_dG * -G * s.y + dL_dz * Tw.y //+ dL_duv[1]    // add dL_duv[1] to dL_ds.y
 				};
 				const float3 dz_dTw = {s.x, s.y, 1.0};
 				const float dsx_pz = dL_ds.x / p.z;
@@ -464,15 +491,14 @@ renderCUDA(
 				atomicAdd(&dL_dtransMat[global_id * 9 + 7],  dL_dTw.y);
 				atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dTw.z);
 			} else {
-				// Update gradients w.r.t. center of Gaussian 2D mean position
-				// const float dG_ddelx = -G * FilterInvSquare * d.x;
-				// const float dG_ddely = -G * FilterInvSquare * d.y;
-				// atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); // not scaled
-				// atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely); // not scaled
-				// change to dL_uv
-				atomicAdd(&dL_dmean2D[global_id].x, dL_uv[0]); 
-				atomicAdd(&dL_dmean2D[global_id].y, dL_uv[1]); 
 				
+				printf("rho3d > rho2d, rho3d: %f, rho2d: %f, dL_dG: %.8f, G: %.8f, dL_dz: %.8f\n", rho3d, rho2d, dL_dG, G, dL_dz);
+				
+				// Update gradients w.r.t. center of Gaussian 2D mean position
+				const float dG_ddelx = -G * FilterInvSquare * d.x;
+				const float dG_ddely = -G * FilterInvSquare * d.y;
+				atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); 
+				atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely);
 				// Propagate the gradients of depth
 				atomicAdd(&dL_dtransMat[global_id * 9 + 6],  s.x * dL_dz);
 				atomicAdd(&dL_dtransMat[global_id * 9 + 7],  s.y * dL_dz);
@@ -480,7 +506,13 @@ renderCUDA(
 			}
 
 			// Update gradients w.r.t. opacity of the Gaussian
-			atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
+			if (edge_flag) {
+				atomicAdd(&(dL_dopacity[global_id]), dL_dalpha * G / threshold_G);
+			} else {
+				atomicAdd(&(dL_dopacity[global_id]), dL_dalpha);
+			}
+			// atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
+			// atomicAdd(&(dL_dopacity[global_id]), dL_dalpha);
 		}
 	}
 }
