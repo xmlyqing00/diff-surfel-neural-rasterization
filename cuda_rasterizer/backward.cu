@@ -323,14 +323,17 @@ renderCUDA(
 			// const float alpha = min(0.99f, opa * G);
 			// float alpha = opa;
 			// if (opa * G < threshold_G) alpha = opa * G / threshold_G;
-			float alpha = min(0.99f, opa * G);
+			opa = min(0.99f, opa);
+			float alpha;
 			bool edge_flag = false;
-			if (alpha < threshold_G) {
-				alpha = opa * G / threshold_G;
+			if (opa * G < threshold_G) {
+				// alpha = opa * G / threshold_G;
+				alpha = opa * opa * G / threshold_G;
 				edge_flag = true;
 			} else {
 				alpha = opa;
 			}
+			// alpha = min(0.99f, alpha);
 			if (alpha < threshold_alpha) continue;
 			// if (G < 1.0f / 255.0f)
 			// const float alpha = min(0.99f, opa);
@@ -445,7 +448,7 @@ renderCUDA(
 			// Helpful reusable temporary variables
 			float dL_dG;
 			if (edge_flag) {
-				dL_dG = nor_o.w * dL_dalpha / threshold_G;
+				dL_dG = dL_dalpha * nor_o.w *nor_o.w / threshold_G;
 			} else {
 				dL_dG = 0;
 			}
@@ -507,7 +510,7 @@ renderCUDA(
 
 			// Update gradients w.r.t. opacity of the Gaussian
 			if (edge_flag) {
-				atomicAdd(&(dL_dopacity[global_id]), dL_dalpha * G / threshold_G);
+				atomicAdd(&(dL_dopacity[global_id]), dL_dalpha * 2 * opa * G / threshold_G);
 			} else {
 				atomicAdd(&(dL_dopacity[global_id]), dL_dalpha);
 			}

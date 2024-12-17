@@ -400,14 +400,17 @@ renderCUDA(
 			// 	alpha = opa * G / threshold_G;
 			// 	// alpha = -opa / (threshold_G ** 2) * G ** 2 + 2 * opa / threshold_G * G;
 			// }
-			float alpha = min(opa * G, 0.99f);
+			opa = min(0.99f, opa);
+			float alpha;
 			bool edge_flag = false;
-			if (alpha < threshold_G) {
-				alpha = opa * G / threshold_G;
+			if (opa * G < threshold_G) {
+				// alpha = opa * G / threshold_G;
+				alpha = opa * opa * G / threshold_G;
 				edge_flag = true;
 			} else {
 				alpha = opa;
 			}
+			// alpha = min(0.99f, alpha);
 			if (alpha < threshold_alpha) continue;
 
 			// float alpha = min(0.99f, opa * G);
