@@ -395,23 +395,21 @@ renderCUDA(
 			// and its exponential falloff from mean.
 			// Avoid numerical instabilities (see paper appendix). 
 			const float G = exp(power);
-			// float alpha = opa;
-			// if (G < threshold_G) {
-			// 	alpha = opa * G / threshold_G;
-			// 	// alpha = -opa / (threshold_G ** 2) * G ** 2 + 2 * opa / threshold_G * G;
-			// }
-			opa = min(0.99f, opa);
-			float alpha;
-			bool edge_flag = false;
-			if (opa * G < threshold_G) {
-				// alpha = opa * G / threshold_G;
-				alpha = opa * opa * G / threshold_G;
-				edge_flag = true;
-			} else {
-				alpha = opa;
+			if (G < threshold_visible) continue;
+			float alpha = opa;
+			bool at_boundary = false;
+			if (G < threshold_boundary) {
+				alpha = opa * G / threshold_boundary;
+
+				// set uv to the boundary of the surface
+				// float uv_length = sqrt(uv.x * uv.x + uv.y * uv.y);
+				// float2 uv_normalized = {uv.x / uv_length, uv.y / uv_length};
+				// float uv_s = sqrt(-2 * log(threshold_boundary));
+				// uv = {uv_s * uv_normalized.x, uv_s * uv_normalized.y};
+				at_boundary = true;
+				// printf("at boundary: len %f, uv_s %f, uv.x %f, uv.y %f\n", uv_length, uv_s, uv.x, uv.y);
 			}
-			// alpha = min(0.99f, alpha);
-			if (alpha < threshold_alpha) continue;
+			alpha = min(0.99f, alpha);
 
 			// float alpha = min(0.99f, opa * G);
 			// if (exp(power) < 1.0f / 255.0f)
@@ -449,13 +447,23 @@ renderCUDA(
 			// for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
 				// C[ch] += features[collected_id[j] * COLOR_CHANNELS + ch] * w;
 			// }
-			Network net;
-			params->get_params(collected_id[j], net, false);
-			float uv_[2] = {uv.x, uv.y};
-			net.forward(uv_, C);
-			for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
-				C[ch] *= w;
+			
+			if (!at_boundary) {
+				Network net;
+				params->get_params(collected_id[j], net, false);
+				float uv_[2] = {uv.x, uv.y};
+				net.forward(uv_, C);
+				for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
+					C[ch] *= w;
+				}
+				
+			} else {
+				for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
+					C[ch] = w;
+				}
 			}
+			
+			
 			// if (pix.x == 250 && pix.y == 250) {
 			// 	printf("uv: %f, %f\n", uv.x, uv.y);
 			// 	for (int ch = 0; ch < 3; ch++) {

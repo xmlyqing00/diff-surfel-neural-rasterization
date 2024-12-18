@@ -46,6 +46,7 @@ RasterizeGaussiansCUDA(
 	const torch::Tensor& opacity,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
+	// const torch::Tensor& boundary_color,
 	const torch::Tensor& l1_lw,
 	const torch::Tensor& l1_mg,
 	const torch::Tensor& l1_lw2,
@@ -152,6 +153,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const torch::Tensor& colors,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
+	// const torch::Tensor& boundary_color,
 	const torch::Tensor& l1_lw,
 	const torch::Tensor& l1_mg,
 	const torch::Tensor& l1_lw2,
@@ -202,6 +204,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   torch::Tensor dL_dtransMat = torch::zeros({P, 9}, means3D.options());
   torch::Tensor dL_dscales = torch::zeros({P, 2}, means3D.options());
   torch::Tensor dL_drotations = torch::zeros({P, 4}, means3D.options());
+//   torch::Tensor dL_boundary_color = torch::zeros({P, 3}, means3D.options());
   torch::Tensor dL_l1_lw = torch::zeros({P, input_dim + 1, hidden_dim}, means3D.options());
   torch::Tensor dL_l1_mg = torch::zeros({P, input_dim + 1, hidden_dim}, means3D.options());
   torch::Tensor dL_l1_lw2 = torch::zeros({P, hidden_dim + 1, hidden_dim}, means3D.options());

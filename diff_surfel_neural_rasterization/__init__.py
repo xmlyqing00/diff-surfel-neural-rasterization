@@ -25,6 +25,7 @@ def rasterize_gaussians(
     opacities,
     scales,
     rotations,
+    # boundary_color,
     l1_lw,
     l1_mg,
     l1_lw2,
@@ -39,6 +40,7 @@ def rasterize_gaussians(
         opacities,
         scales,
         rotations,
+        # boundary_color,
         l1_lw,
         l1_mg,
         l1_lw2,
@@ -57,6 +59,7 @@ class _RasterizeGaussians(torch.autograd.Function):
         opacities,
         scales,
         rotations,
+        # boundary_color,
         l1_lw,
         l1_mg,
         l1_lw2,
@@ -74,6 +77,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             opacities,
             scales,
             rotations,
+            # boundary_color,
             l1_lw,
             l1_mg,
             l1_lw2,
@@ -124,6 +128,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 colors_precomp, 
                 scales, 
                 rotations, 
+                # boundary_color,
                 l1_lw,
                 l1_mg,
                 l1_lw2,
@@ -155,7 +160,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 raise ex
         else:
              grad_means2D, grad_colors_precomp, grad_opacities, grad_means3D, grad_cov3Ds_precomp, grad_scales, grad_rotations, \
-                grad_l1_lw, grad_l1_mg, grad_l1_lw2, grad_l1_lout = _C.rasterize_gaussians_backward(*args)
+                 grad_l1_lw, grad_l1_mg, grad_l1_lw2, grad_l1_lout = _C.rasterize_gaussians_backward(*args)
 
         grads = (
             grad_means3D,
@@ -164,6 +169,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             grad_opacities,
             grad_scales,
             grad_rotations,
+            # grad_boundary_color, 
             grad_l1_lw, grad_l1_mg, grad_l1_lw2, grad_l1_lout,
             grad_cov3Ds_precomp,
             None,
@@ -218,6 +224,7 @@ class GaussianRasterizer(nn.Module):
         if cov3D_precomp is None:
             cov3D_precomp = torch.Tensor([]).cuda()
         
+        # boundary_color, l1_lw, l1_mg, l1_lw2, lout_lw = neural_params
         l1_lw, l1_mg, l1_lw2, lout_lw = neural_params
 
         # Invoke C++/CUDA rasterization routine
@@ -228,6 +235,7 @@ class GaussianRasterizer(nn.Module):
             opacities,
             scales, 
             rotations,
+            # boundary_color,
             l1_lw,
             l1_mg,
             l1_lw2,
