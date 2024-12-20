@@ -332,7 +332,7 @@ renderCUDA(
 				at_boundary = true;
 			}
 			alpha = min(0.99f, alpha);
-			// if (alpha < threshold_visible) continue;
+			if (alpha < threshold_visible) continue;
 
 			T = T / (1.f - alpha);
 			const float dchannel_dcolor = alpha * T;

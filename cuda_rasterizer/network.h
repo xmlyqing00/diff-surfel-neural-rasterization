@@ -14,7 +14,6 @@ const int output_dim = 4;
 class Network {
 
 public:
-	// float * boundary_color;
 	float * l1_weight;
 	float * l1_bias;
 	float * l1_mu;
@@ -24,7 +23,6 @@ public:
 	float * lout_weight;
 	float * lout_bias;
 
-	// float * dL_boundary_color;
 	float * dL_l1_weight;
 	float * dL_l1_bias;
 	float * dL_l1_mu;
@@ -36,16 +34,8 @@ public:
     
     __device__ Network() {}
 
-	// __device__ void forward_boundary(float * output) const {
-	// 	for (int i = 0; i < 3; i++) {
-	// 		output[i] = boundary_color[i];
-	// 	}
-	// }
-
 	__device__ void forward(const float * input, float * output) const {
 		
-		
-
 		// float l1_out[hidden_dim];
 		// linear(input, l1_out, l1_weight, l1_bias, input_dim, hidden_dim);
 		// relu(l1_out, l1_out, hidden_dim);
@@ -58,12 +48,6 @@ public:
 
 		linear(input, output, l1_weight, l1_bias, input_dim, hidden_dim);
 	}
-
-	// __device__ void backward_boundary(const float * dL_dcolor) {
-	// 	for (int i = 0; i < 3; i++) {
-	// 		atomicAdd(dL_boundary_color+i, dL_dcolor[i]);
-	// 	}
-	// }
 
 	__device__ void backward(
 		const float * input, const float * dL_dcolor, float * dL_input,
@@ -198,13 +182,11 @@ private:
 	int lout_linear_bias_start = hidden_dim * output_dim;
 
 public:
-	// float* boundary_color = nullptr;
 	float* l1_lw = nullptr;
 	float* l1_mg = nullptr;
 	float* l1_lw2 = nullptr;
 	float* lout_lw = nullptr;
 
-	// float * dL_boundary_color = nullptr;
 	float * dL_l1_lw = nullptr;
 	float * dL_l1_mg = nullptr;
 	float * dL_l1_lw2 = nullptr;
@@ -213,15 +195,10 @@ public:
 	Params() {}
 	
     void set_params(
-		// const torch::Tensor& boundary_color_, 
-		const torch::Tensor& l1_lw_, 
-		const torch::Tensor& l1_mg_, 
-		const torch::Tensor& l1_lw2_, 
-		const torch::Tensor& lout_lw_
+		const torch::Tensor& l1_lw_, const torch::Tensor& l1_mg_, const torch::Tensor& l1_lw2_, const torch::Tensor& lout_lw_
 	) {
 
 		// contiguous() is used to ensure that the tensor is stored in a contiguous chunk of memory
-		// boundary_color = boundary_color_.contiguous().data<float>();  // (N, 3)
 		l1_lw = l1_lw_.contiguous().data<float>(); // (N, hidden_dim, in_dim + 1)
 		l1_mg = l1_mg_.contiguous().data<float>();  // (N, hidden_dim, in_dim + 1)
 		l1_lw2 = l1_lw2_.contiguous().data<float>();  // (N, hidden_dim, hidden_dim + 1)
@@ -229,10 +206,8 @@ public:
 	}
 
 	void set_grads(
-		// torch::Tensor &dL_boundary_color_,
 		torch::Tensor &dL_l1_lw_, torch::Tensor &dL_l1_mg_, torch::Tensor &dL_l1_lw2_, torch::Tensor &dL_lout_lw_
 	) {
-		// dL_boundary_color = dL_boundary_color_.contiguous().data_ptr<float>();
 		dL_l1_lw = dL_l1_lw_.contiguous().data_ptr<float>();
 		dL_l1_mg = dL_l1_mg_.contiguous().data_ptr<float>();
 		dL_l1_lw2 = dL_l1_lw2_.contiguous().data_ptr<float>();
@@ -240,9 +215,6 @@ public:
 	}
 
 	__device__ void get_params(int idx, Network &net, bool get_grad) const {
-
-		// boundary_color
-		// net.boundary_color = boundary_color + idx * 3;
 
 		// l1_weight and l1_bias
 		int offset = idx * l1_lw_size;
@@ -266,9 +238,6 @@ public:
 
 		if (get_grad) {
 			
-			// boundary_color
-			// net.dL_boundary_color = dL_boundary_color + idx * 3;
-
 			offset = idx * l1_lw_size;
 			net.dL_l1_weight = dL_l1_lw + offset;
 			net.dL_l1_bias = dL_l1_lw + offset + l1_bias_start;

@@ -39,7 +39,7 @@ __device__ const float far_n = 100.0;
 __device__ const float FilterSize = 0.707106; // sqrt(2) / 2
 __device__ const float FilterInvSquare = 2.0f;
 __device__ const float FilterInv = 1.41421f;
-__device__ const float threshold_boundary = 0.008f; //2 / 255.0f;
+__device__ const float threshold_boundary = 0.010f; //2 / 255.0f;
 __device__ const float threshold_visible = 0.004f; //1/255.f; //0.001f; // 0.5 / 255.0f;
 
 // Spherical harmonics coefficients

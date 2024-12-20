@@ -410,7 +410,7 @@ renderCUDA(
 				at_boundary = true;
 			}
 			alpha = min(0.99f, alpha);
-			// if (alpha < threshold_visible) continue;
+			if (alpha < threshold_visible) continue;
 
 			float test_T = T * (1 - alpha);
 			if (test_T < 0.0001f)
