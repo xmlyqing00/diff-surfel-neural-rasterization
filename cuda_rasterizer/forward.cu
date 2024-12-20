@@ -302,6 +302,7 @@ renderCUDA(
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
 	float C[COLOR_CHANNELS + 1] = { 0 };
+	float net_res[COLOR_CHANNELS + 1] = {0};
 
 
 #if RENDER_AXUTILITY
@@ -386,7 +387,7 @@ renderCUDA(
 			float normal[3] = {nor_o.x, nor_o.y, nor_o.z};
 			float opa = nor_o.w;
 
-			float power = -0.5f * rho;
+			float power = -1.0f * rho;
 			if (power > 0.0f)
 				continue;
 
@@ -402,19 +403,14 @@ renderCUDA(
 				alpha = opa * G / threshold_boundary;
 
 				// set uv to the boundary of the surface
-				// float uv_length = sqrt(uv.x * uv.x + uv.y * uv.y);
-				// float2 uv_normalized = {uv.x / uv_length, uv.y / uv_length};
-				// float uv_s = sqrt(-2 * log(threshold_boundary));
-				// uv = {uv_s * uv_normalized.x, uv_s * uv_normalized.y};
+				float uv_length = sqrt(uv.x * uv.x + uv.y * uv.y);
+				float2 uv_normalized = {uv.x / uv_length, uv.y / uv_length};
+				float uv_s = sqrt(-2 * log(threshold_boundary));
+				uv = {uv_s * uv_normalized.x, uv_s * uv_normalized.y};
 				at_boundary = true;
-				// printf("at boundary: len %f, uv_s %f, uv.x %f, uv.y %f\n", uv_length, uv_s, uv.x, uv.y);
 			}
 			alpha = min(0.99f, alpha);
-
-			// float alpha = min(0.99f, opa * G);
-			// if (exp(power) < 1.0f / 255.0f)
-				// continue;
-			// const float alpha = min(0.99f, opa);
+			// if (alpha < threshold_visible) continue;
 
 			float test_T = T * (1 - alpha);
 			if (test_T < 0.0001f)
@@ -448,30 +444,14 @@ renderCUDA(
 				// C[ch] += features[collected_id[j] * COLOR_CHANNELS + ch] * w;
 			// }
 			
-			if (!at_boundary) {
-				Network net;
-				params->get_params(collected_id[j], net, false);
-				float uv_[2] = {uv.x, uv.y};
-				net.forward(uv_, C);
-				for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
-					C[ch] *= w;
-				}
-				
-			} else {
-				for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
-					C[ch] = w;
-				}
+			Network net;
+			params->get_params(collected_id[j], net, false);
+			float uv_[2] = {uv.x, uv.y};
+			net.forward(uv_, net_res);
+			for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
+				C[ch] += net_res[ch] * w;
 			}
-			
-			
-			// if (pix.x == 250 && pix.y == 250) {
-			// 	printf("uv: %f, %f\n", uv.x, uv.y);
-			// 	for (int ch = 0; ch < 3; ch++) {
-			// 		printf("C[%d]: %f; ", ch, C[ch]);
-			// 	}
-			// 	printf("w: %f\n", w);
-			// }
-
+				
 			T = test_T;
 
 			// Keep track of last range entry to update this

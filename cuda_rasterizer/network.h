@@ -43,6 +43,8 @@ public:
 	// }
 
 	__device__ void forward(const float * input, float * output) const {
+		
+		
 
 		// float l1_out[hidden_dim];
 		// linear(input, l1_out, l1_weight, l1_bias, input_dim, hidden_dim);

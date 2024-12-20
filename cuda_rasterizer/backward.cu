@@ -185,7 +185,7 @@ renderCUDA(
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_normal_opacity[BLOCK_SIZE];
-	__shared__ float collected_colors[C * BLOCK_SIZE];
+	// __shared__ float collected_colors[C * BLOCK_SIZE];
 	__shared__ float3 collected_Tu[BLOCK_SIZE];
 	__shared__ float3 collected_Tv[BLOCK_SIZE];
 	__shared__ float3 collected_Tw[BLOCK_SIZE];
@@ -266,9 +266,9 @@ renderCUDA(
 			collected_Tu[block.thread_rank()] = {transMats[9 * coll_id+0], transMats[9 * coll_id+1], transMats[9 * coll_id+2]};
 			collected_Tv[block.thread_rank()] = {transMats[9 * coll_id+3], transMats[9 * coll_id+4], transMats[9 * coll_id+5]};
 			collected_Tw[block.thread_rank()] = {transMats[9 * coll_id+6], transMats[9 * coll_id+7], transMats[9 * coll_id+8]};
-			for (int i = 0; i < C; i++)
-				collected_colors[i * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C + i];
-				// collected_depths[block.thread_rank()] = depths[coll_id];
+			// for (int i = 0; i < C; i++)
+			// 	collected_colors[i * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C + i];
+			// 	// collected_depths[block.thread_rank()] = depths[coll_id];
 		}
 		block.sync();
 
@@ -315,30 +315,24 @@ renderCUDA(
 
 			// accumulations
 
-			float power = -0.5f * rho;
+			float power = -1.0f * rho;
 			if (power > 0.0f)
 				continue;
 
 			const float G = exp(power);
-			// const float alpha = min(0.99f, opa * G);
-			// float alpha = opa;
-			// if (opa * G < threshold_boundary) alpha = opa * G / threshold_boundary;
-			// opa = min(0.99f, opa);
 			if (G < threshold_visible) continue;
-
 			float alpha = opa;
 			bool at_boundary = false;
 			if (G < threshold_boundary) {
 				alpha = opa * G / threshold_boundary;
-				// float uv_length = sqrt(uv.x * uv.x + uv.y * uv.y);
-				// float2 uv_normalized = {uv.x / uv_length, uv.y / uv_length};
-				// float uv_s = sqrt(-2 * log(threshold_boundary));
-				// uv = {uv_s * uv_normalized.x, uv_s * uv_normalized.y};
+				float uv_length = sqrt(uv.x * uv.x + uv.y * uv.y);
+				float2 uv_normalized = {uv.x / uv_length, uv.y / uv_length};
+				float uv_s = sqrt(-2 * log(threshold_boundary));
+				uv = {uv_s * uv_normalized.x, uv_s * uv_normalized.y};
 				at_boundary = true;
 			}
 			alpha = min(0.99f, alpha);
-			// if (G < 1.0f / 255.0f)
-			// const float alpha = min(0.99f, opa);
+			// if (alpha < threshold_visible) continue;
 
 			T = T / (1.f - alpha);
 			const float dchannel_dcolor = alpha * T;
@@ -348,20 +342,24 @@ renderCUDA(
 			float dL_dalpha = 0.0f;
 			const int global_id = collected_id[j];
 			float dL_dcolor[COLOR_CHANNELS + 1] = {0};
+
+			// forward to get color
+			float net_result[3] = {0};
+			Network net;
+			params->get_params(global_id, net, true);
+			float net_input[2] = {uv.x, uv.y};
+			net.forward(net_input, net_result);
+
 			for (int ch = 0; ch < C; ch++)
 			{
-				const float c = collected_colors[ch * BLOCK_SIZE + j];
+				// const float c = collected_colors[ch * BLOCK_SIZE + j];
 				// Update last color (to be used in the next iteration)
 				accum_rec[ch] = last_alpha * last_color[ch] + (1.f - last_alpha) * accum_rec[ch];
-				last_color[ch] = c;
+				last_color[ch] = net_result[ch];
 
 				const float dL_dchannel = dL_dpixel[ch];
-				dL_dalpha += (c - accum_rec[ch]) * dL_dchannel;
-				// if (c > 10) {
-				// 	printf("ch %d, dL_dalpha %.8f, c %.8f, accum_rec[ch] %.8f, dL_dchannel %.8f\n", 
-				// 		ch, dL_dalpha, c, accum_rec[ch], dL_dchannel
-				// 	);
-				// }
+				dL_dalpha += (net_result[ch] - accum_rec[ch]) * dL_dchannel;
+	
 				// Update the gradients w.r.t. color of the Gaussian. 
 				// Atomic, since this pixel is just one of potentially
 				// many that were affected by this Gaussian.
@@ -370,43 +368,9 @@ renderCUDA(
 			}
 
 			// backpropagate the gradients to the network
-			// if (!at_boundary) {
-			
-			if (!at_boundary) {
-				Network net;
-				params->get_params(collected_id[j], net, true);
-				float uv_[2] = {uv.x, uv.y};
-				float dL_duv[2] = {0};
-				// for (int tmpk = 0; tmpk < 3; tmpk++) {
-				// 	if (dL_dcolor[tmpk] > 0) {
-				// 		printf("pix.xy %d %d, dL_dcolor[%d] = %.8f\n", pix.x, pix.y, tmpk, dL_dcolor[tmpk]);
-				// 	}
-				// }
-				// if (dL_dcolor[1] > 0) {
-				// 	printf("pix.xy %d %d, dL_dcolor[1] = %.10f, dchannel_dcolor = %.8f, dL_dpixel[1] = %.8f \n", pix.x, pix.y, dL_dcolor[1], dchannel_dcolor, dL_dpixel[1]);
-				// 	printf("T %.8f alpha %.8f\n", T, alpha);
+			float dL_duv[2] = {0};
+			net.backward(net_input, dL_dcolor, dL_duv, false);
 
-				// }
-				net.backward(uv_, dL_dcolor, dL_duv, false);
-			} else {
-				// net.backward_boundary(dL_dcolor);
-			}
-			
-			// if (abs(int(pix.x - 250)) < 10 && abs(int(pix.y - 250)) < 10) {
-				
-			// 	printf("pix.x %d pix.y %d, dL_duv %.8f %.8f\n", pix.x, pix.y, dL_duv[0], dL_duv[1]);
-			// 	// printf("BLOCK %d %d", BLOCK_X, BLOCK_Y);
-			// 	// printf("backward done. dL_duv = {%f %f}\n", dL_duv[0], dL_duv[1]);
-			// 	// printf("alpha %f, T %f, dchannel_dcolor %f\n", alpha, T, dchannel_dcolor);
-			// 	// printf("dL_dpixel[ch] %.8f %.8f %.8f\n", dL_dpixel[0], dL_dpixel[1], dL_dpixel[2]);
-			// 	// printf("dL_dcolor %.8f %.8f %.8f\n", dL_dcolor[0], dL_dcolor[1], dL_dcolor[2]);
-			// } else {
-			// 	// net.backward(uv_, dL_dcolor, dL_duv, false);
-			// }
-
-			// if (block.thread_rank() == 0) {
-			// 	printf("infer_rgbd_grad done.\n");
-			// }
 
 			float dL_dz = 0.0f;
 			float dL_dweight = 0;
@@ -466,9 +430,6 @@ renderCUDA(
 			} else {
 				dL_dG = 0;
 			}
-			// dL_dG = 0;
-			// float dL_dG = nor_o.w * dL_dalpha;
-			// const float dL_dG = 0;
 #if RENDER_AXUTILITY
 			dL_dz += alpha * T * dL_ddepth; 
 #endif
@@ -477,8 +438,8 @@ renderCUDA(
 				
 				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
 				const float2 dL_ds = {
-					dL_dG * -G * s.x + dL_dz * Tw.x,
-					dL_dG * -G * s.y + dL_dz * Tw.y
+					dL_dG * -2 * G * s.x + dL_dz * Tw.x,
+					dL_dG * -2 * G * s.y + dL_dz * Tw.y
 				};
 				const float3 dz_dTw = {s.x, s.y, 1.0};
 				const float dsx_pz = dL_ds.x / p.z;
@@ -508,8 +469,8 @@ renderCUDA(
 			} else {
 				
 				// Update gradients w.r.t. center of Gaussian 2D mean position
-				const float dG_ddelx = -G * FilterInvSquare * d.x;
-				const float dG_ddely = -G * FilterInvSquare * d.y;
+				const float dG_ddelx = -2 * G * FilterInvSquare * d.x;
+				const float dG_ddely = -2 * G * FilterInvSquare * d.y;
 				atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); 
 				atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely);
 				// Propagate the gradients of depth
@@ -522,7 +483,6 @@ renderCUDA(
 			if (at_boundary) {
 				// atomicAdd(&(dL_dopacity[global_id]), dL_dalpha * G / threshold_boundary);
 			} else {
-				// printf("dL_dalpha %.8f, alpha %.8f, T %.9f\n", dL_dalpha, alpha, T);
 				atomicAdd(&(dL_dopacity[global_id]), dL_dalpha);
 			}
 		}

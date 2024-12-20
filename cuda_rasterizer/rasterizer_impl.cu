@@ -387,6 +387,7 @@ void CudaRasterizer::Rasterizer::backward(
 	// Compute loss gradients w.r.t. 2D mean position, conic matrix,
 	// opacity and RGB of Gaussians from per-pixel loss gradients.
 	// If we were given precomputed colors and not SHs, use them.
+	
 	const float* color_ptr = (colors_precomp != nullptr) ? colors_precomp : geomState.rgb;
 	const float* depth_ptr = geomState.depths;
 	const float* transMat_ptr = (transMat_precomp != nullptr) ? transMat_precomp : geomState.transMat;
