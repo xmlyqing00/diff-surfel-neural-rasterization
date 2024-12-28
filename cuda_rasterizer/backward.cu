@@ -211,7 +211,7 @@ renderCUDA(
 	float dL_dnormal2D[3];
 	const int median_contributor = inside ? n_contrib[pix_id + H * W] : 0;
 	float dL_dmedian_depth;
-	float dL_dmax_dweight;
+	// float dL_dmax_dweight;
 
 	if (inside) {
 		dL_ddepth = dL_depths[DEPTH_OFFSET * H * W + pix_id];
@@ -369,7 +369,7 @@ renderCUDA(
 
 			// backpropagate the gradients to the network
 			float dL_duv[2] = {0};
-			net.backward(net_input, dL_dcolor, dL_duv, false);
+			net.backward(net_input, dL_dcolor, dL_duv);
 
 
 			float dL_dz = 0.0f;

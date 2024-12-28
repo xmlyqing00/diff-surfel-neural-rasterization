@@ -46,11 +46,9 @@ RasterizeGaussiansCUDA(
 	const torch::Tensor& opacity,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
-	// const torch::Tensor& boundary_color,
-	const torch::Tensor& l1_lw,
-	const torch::Tensor& l1_mg,
-	const torch::Tensor& l1_lw2,
-	const torch::Tensor& lout_lw,
+	const torch::Tensor& gabor_filters,
+	const torch::Tensor& gabor_linears,
+	const torch::Tensor& gabor_out_linear,
 	const float scale_modifier,
 	const torch::Tensor& transMat_precomp,
 	const torch::Tensor& viewmatrix,
@@ -82,10 +80,9 @@ RasterizeGaussiansCUDA(
   CHECK_INPUT(viewmatrix);
   CHECK_INPUT(projmatrix);
   CHECK_INPUT(campos);
-  CHECK_INPUT(l1_lw);
-  CHECK_INPUT(l1_mg);
-  CHECK_INPUT(l1_lw2);
-  CHECK_INPUT(lout_lw);
+  CHECK_INPUT(gabor_filters);
+  CHECK_INPUT(gabor_linears);
+  CHECK_INPUT(gabor_out_linear);
 
   auto int_opts = means3D.options().dtype(torch::kInt32);
   auto float_opts = means3D.options().dtype(torch::kFloat32);
@@ -104,7 +101,7 @@ RasterizeGaussiansCUDA(
   std::function<char*(size_t)> imgFunc = resizeFunctional(imgBuffer);
 
   Params params_host;
-  params_host.set_params(l1_lw, l1_mg, l1_lw2, lout_lw);
+  params_host.set_params(gabor_filters, gabor_linears, gabor_out_linear);
   Params* params;
   cudaMalloc(&params, sizeof(Params));
   cudaMemcpy(params, &params_host, sizeof(Params), cudaMemcpyHostToDevice);
@@ -145,7 +142,7 @@ RasterizeGaussiansCUDA(
   return std::make_tuple(rendered, out_color, out_others, radii, geomBuffer, binningBuffer, imgBuffer);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
  RasterizeGaussiansBackwardCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -153,11 +150,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const torch::Tensor& colors,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
-	// const torch::Tensor& boundary_color,
-	const torch::Tensor& l1_lw,
-	const torch::Tensor& l1_mg,
-	const torch::Tensor& l1_lw2,
-	const torch::Tensor& lout_lw,
+	const torch::Tensor& gabor_filters,
+	const torch::Tensor& gabor_linears,
+	const torch::Tensor& gabor_out_linear,
 	const float scale_modifier,
 	const torch::Tensor& transMat_precomp,
 	const torch::Tensor& viewmatrix,
@@ -187,10 +182,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   CHECK_INPUT(binningBuffer);
   CHECK_INPUT(imageBuffer);
   CHECK_INPUT(geomBuffer);
-  CHECK_INPUT(l1_lw);
-  CHECK_INPUT(l1_mg);
-  CHECK_INPUT(l1_lw2);
-  CHECK_INPUT(lout_lw);
+  CHECK_INPUT(gabor_filters);
+  CHECK_INPUT(gabor_linears);
+  CHECK_INPUT(gabor_out_linear);
 
   const int P = means3D.size(0);
   const int H = dL_dout_color.size(1);
@@ -204,15 +198,13 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   torch::Tensor dL_dtransMat = torch::zeros({P, 9}, means3D.options());
   torch::Tensor dL_dscales = torch::zeros({P, 2}, means3D.options());
   torch::Tensor dL_drotations = torch::zeros({P, 4}, means3D.options());
-//   torch::Tensor dL_boundary_color = torch::zeros({P, 3}, means3D.options());
-  torch::Tensor dL_l1_lw = torch::zeros({P, input_dim + 1, hidden_dim}, means3D.options());
-  torch::Tensor dL_l1_mg = torch::zeros({P, input_dim + 1, hidden_dim}, means3D.options());
-  torch::Tensor dL_l1_lw2 = torch::zeros({P, hidden_dim + 1, hidden_dim}, means3D.options());
-  torch::Tensor dL_lout_lw = torch::zeros({P, hidden_dim + 1, output_dim}, means3D.options());
+  torch::Tensor dL_dgabor_filters = torch::zeros({P, GABOR_LAYER_NUM+1,  (GABOR_IN_DIM + 1) * GABOR_HIDDEN_DIM * 2}, means3D.options());
+  torch::Tensor dL_dgabor_linears = torch::zeros({P, GABOR_LAYER_NUM,  (GABOR_HIDDEN_DIM + 1) * GABOR_HIDDEN_DIM}, means3D.options());
+  torch::Tensor dL_dgabor_out_linear = torch::zeros({P, (GABOR_HIDDEN_DIM + 1) * GABOR_OUT_DIM}, means3D.options());
 
   Params params_host;
-  params_host.set_params(l1_lw, l1_mg, l1_lw2, lout_lw);
-  params_host.set_grads(dL_l1_lw, dL_l1_mg, dL_l1_lw2, dL_lout_lw);
+  params_host.set_params(gabor_filters, gabor_linears, gabor_out_linear);
+  params_host.set_grads(dL_dgabor_filters, dL_dgabor_linears, dL_dgabor_out_linear);
   Params* params;
   cudaMalloc(&params, sizeof(Params));
   cudaMemcpy(params, &params_host, sizeof(Params), cudaMemcpyHostToDevice);
@@ -255,7 +247,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 
   return std::make_tuple(
 	dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dtransMat, dL_dscales, dL_drotations,
-	dL_l1_lw, dL_l1_mg, dL_l1_lw2, dL_lout_lw
+	dL_dgabor_filters, dL_dgabor_linears, dL_dgabor_out_linear
  );
 }
 

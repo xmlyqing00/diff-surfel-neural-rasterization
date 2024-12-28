@@ -398,7 +398,7 @@ renderCUDA(
 			const float G = exp(power);
 			if (G < threshold_visible) continue;
 			float alpha = opa;
-			bool at_boundary = false;
+			// bool at_boundary = false;
 			if (G < threshold_boundary) {
 				alpha = opa * G / threshold_boundary;
 
@@ -407,7 +407,7 @@ renderCUDA(
 				float2 uv_normalized = {uv.x / uv_length, uv.y / uv_length};
 				float uv_s = sqrt(-2 * log(threshold_boundary));
 				uv = {uv_s * uv_normalized.x, uv_s * uv_normalized.y};
-				at_boundary = true;
+				// at_boundary = true;
 			}
 			alpha = min(0.99f, alpha);
 			if (alpha < threshold_visible) continue;
