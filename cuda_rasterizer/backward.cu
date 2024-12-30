@@ -375,6 +375,11 @@ renderCUDA(
 			// } else {
 			// 	net.backward(net_input, dL_dcolor, dL_duv, false);
 			// }
+			// if (!at_boundary)
+			// if (at_boundary) {
+			// 	printf("pix: %d %d, uv %.3f %.3f\n", pix.x, pix.y, uv.x, uv.y);
+			// }
+			if (!at_boundary) 
 			net.backward(net_input, dL_dcolor, dL_duv, false);
 
 			float dL_dz = 0.0f;
