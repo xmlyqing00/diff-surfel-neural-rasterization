@@ -348,7 +348,7 @@ renderCUDA(
 			Network net;
 			params->get_params(global_id, net, true);
 			float net_input[2] = {uv.x, uv.y};
-			net.forward(net_input, net_result);
+			net.forward(net_input, net_result, false);
 
 			for (int ch = 0; ch < C; ch++)
 			{
@@ -369,8 +369,13 @@ renderCUDA(
 
 			// backpropagate the gradients to the network
 			float dL_duv[2] = {0};
-			net.backward(net_input, dL_dcolor, dL_duv);
-
+			// if (pix.x >= 200 && pix.x <= 300 && pix.x % 20 == 0 && pix.y == 250) {
+			// 	printf("pix %d %d, dL_dpixel %.8f %.8f %.8f, dL_dcolor %.8f %.8f %.8f\n", pix.x, pix.y, dL_dpixel[0], dL_dpixel[1], dL_dpixel[2], dL_dcolor[0], dL_dcolor[1], dL_dcolor[2]);
+			// 	net.backward(net_input, dL_dcolor, dL_duv, true);
+			// } else {
+			// 	net.backward(net_input, dL_dcolor, dL_duv, false);
+			// }
+			net.backward(net_input, dL_dcolor, dL_duv, false);
 
 			float dL_dz = 0.0f;
 			float dL_dweight = 0;

@@ -105,6 +105,9 @@ class _RasterizeGaussians(torch.autograd.Function):
         raster_settings = ctx.raster_settings
         colors_precomp, means3D, scales, rotations, gabor_filters, gabor_linears, gabor_out_linear, cov3Ds_precomp, radii, geomBuffer, binningBuffer, imgBuffer = ctx.saved_tensors
 
+        # print("grad_out_color", grad_out_color.shape)
+        # print("grad_out_color at 250, 250", grad_out_color[:, 250, 250])
+        # print("grad_out_color_max", grad_out_color.max())
         # Restructure args as C++ method expects them
         args = (raster_settings.bg,
                 means3D, 

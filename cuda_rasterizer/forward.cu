@@ -296,6 +296,7 @@ renderCUDA(
 	__shared__ float3 collected_Tu[BLOCK_SIZE];
 	__shared__ float3 collected_Tv[BLOCK_SIZE];
 	__shared__ float3 collected_Tw[BLOCK_SIZE];
+	__shared__ Network collected_net[BLOCK_SIZE];
 
 	// Initialize helper variables
 	float T = 1.0f;
@@ -447,7 +448,15 @@ renderCUDA(
 			Network net;
 			params->get_params(collected_id[j], net, false);
 			float uv_[2] = {uv.x, uv.y};
-			net.forward(uv_, net_res);
+			
+			// if (pix.x >= 200 && pix.x <= 300 && pix.x % 20 == 0 && pix.y == 250) {
+			// 	net.forward(uv_, net_res, true);
+			// 	// printf("pix: %d, %d, uv: %f, %f, net_res: %.4f %.4f %.4f\n", pix.x, pix.y, uv.x, uv.y, net_res[0], net_res[1], net_res[2]);
+			// } else {
+			// 	net.forward(uv_, net_res, false);
+			// }
+			net.forward(uv_, net_res, false);
+
 			for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
 				C[ch] += net_res[ch] * w;
 			}

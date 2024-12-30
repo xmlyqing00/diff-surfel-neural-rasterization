@@ -198,9 +198,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   torch::Tensor dL_dtransMat = torch::zeros({P, 9}, means3D.options());
   torch::Tensor dL_dscales = torch::zeros({P, 2}, means3D.options());
   torch::Tensor dL_drotations = torch::zeros({P, 4}, means3D.options());
-  torch::Tensor dL_dgabor_filters = torch::zeros({P, GABOR_LAYER_NUM+1,  (GABOR_IN_DIM + 1) * GABOR_HIDDEN_DIM * 2}, means3D.options());
-  torch::Tensor dL_dgabor_linears = torch::zeros({P, GABOR_LAYER_NUM,  (GABOR_HIDDEN_DIM + 1) * GABOR_HIDDEN_DIM}, means3D.options());
-  torch::Tensor dL_dgabor_out_linear = torch::zeros({P, (GABOR_HIDDEN_DIM + 1) * GABOR_OUT_DIM}, means3D.options());
+  torch::Tensor dL_dgabor_filters = torch::zeros_like(gabor_filters);
+  torch::Tensor dL_dgabor_linears = torch::zeros_like(gabor_linears);
+  torch::Tensor dL_dgabor_out_linear = torch::zeros_like(gabor_out_linear);
 
   Params params_host;
   params_host.set_params(gabor_filters, gabor_linears, gabor_out_linear);
