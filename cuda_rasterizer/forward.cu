@@ -296,7 +296,7 @@ renderCUDA(
 	__shared__ float3 collected_Tu[BLOCK_SIZE];
 	__shared__ float3 collected_Tv[BLOCK_SIZE];
 	__shared__ float3 collected_Tw[BLOCK_SIZE];
-	__shared__ Network collected_net[BLOCK_SIZE];
+	__shared__ Network collected_net[16];
 
 	// Initialize helper variables
 	float T = 1.0f;
@@ -328,6 +328,7 @@ renderCUDA(
 			break;
 
 		// Collectively fetch per-Gaussian data from global to shared
+		// int thread_rank = block.thread_rank();
 		int progress = i * BLOCK_SIZE + block.thread_rank();
 		if (range.x + progress < range.y)
 		{
@@ -338,6 +339,14 @@ renderCUDA(
 			collected_Tu[block.thread_rank()] = {transMats[9 * coll_id+0], transMats[9 * coll_id+1], transMats[9 * coll_id+2]};
 			collected_Tv[block.thread_rank()] = {transMats[9 * coll_id+3], transMats[9 * coll_id+4], transMats[9 * coll_id+5]};
 			collected_Tw[block.thread_rank()] = {transMats[9 * coll_id+6], transMats[9 * coll_id+7], transMats[9 * coll_id+8]};
+			// if (block.thread_rank() >= BLOCK_SIZE) {
+			// 	printf("exceeding !!! block_thread_rank: %d, block_size %d\n", block.thread_rank(), BLOCK_SIZE);
+			// }
+			collected_net[block.thread_rank()] = Network();
+			// collected_net[block.thread_rank()] = GaborInterVars();
+			printf("initialized. %d\n", sizeof(Network));
+			// printf("collected_net[block.thread_rank()].filters %p, linears %p\n", collected_net[block.thread_rank()].gabor_layers, collected_net[block.thread_rank()].linear_layers);
+			// params->get_params(coll_id, collected_net[block.thread_rank()], false);
 		}
 		block.sync();
 
@@ -346,6 +355,7 @@ renderCUDA(
 		{
 			// Keep track of current position in range
 			contributor++;
+			// printf("size of network %d\n", sizeof(Network));
 
 			// printf("try to access net in forward.h renderCuda.\n");
 			// printf("net: %p\n", net);
@@ -455,6 +465,8 @@ renderCUDA(
 			// } else {
 			// 	net.forward(uv_, net_res, false);
 			// }
+			// collected_net[j].forward(uv_, net_res, false);
+			// collected_net[j].forward(uv_, net_res, false);
 			net.forward(uv_, net_res, false);
 
 			for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
@@ -510,6 +522,11 @@ void FORWARD::render(
 	float* out_color,
 	float* out_others)
 {
+	cudaDeviceProp prop;
+	cudaGetDeviceProperties(&prop, 0); // Query device 0
+	printf("Shared memory per SM: %d KB\n", prop.sharedMemPerMultiprocessor / 1024);
+	printf("Shared memory per block: %d KB\n", prop.sharedMemPerBlock / 1024);
+
 	renderCUDA<COLOR_CHANNELS> << <grid, block >> > (
 		ranges,
 		point_list,

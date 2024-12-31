@@ -7,7 +7,7 @@
 
 typedef long long ll;
 #define GABOR_IN_DIM 2
-#define GABOR_HIDDEN_DIM 16
+#define GABOR_HIDDEN_DIM 8
 #define GABOR_OUT_DIM 4
 #define GABOR_LAYER_NUM 1
 
@@ -59,6 +59,7 @@ public:
 	float sin_term[GABOR_HIDDEN_DIM];
 	float exp_term[GABOR_HIDDEN_DIM];
 
+	__device__ GaborInterVars() {}
 	__device__ void print(float u, float v) {
 		printf("uv: %.3f %.3f, x2_sum: %.8f\n", u, v, x2_sum);
 		for (int i = 0; i < GABOR_HIDDEN_DIM; i++) {
