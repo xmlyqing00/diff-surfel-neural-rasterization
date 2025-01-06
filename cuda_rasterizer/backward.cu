@@ -348,7 +348,20 @@ renderCUDA(
 			Network net;
 			params->get_params(global_id, net, true);
 			float net_input[2] = {uv.x, uv.y};
-			net.forward(net_input, net_result, false);
+
+			
+			float filter_out[GABOR_LAYER_NUM + 1][GABOR_HIDDEN_DIM];
+			float filter_linear_out[GABOR_LAYER_NUM][GABOR_HIDDEN_DIM];
+			float mix_out[GABOR_LAYER_NUM][GABOR_HIDDEN_DIM];
+			GaborInterVars gabor_inter_vars[GABOR_LAYER_NUM + 1];
+			// net.forward(net_input, net_result, false);
+			net.forward_and_save_inter_vars(
+				net_input, net_result,
+				filter_out, filter_linear_out, mix_out, gabor_inter_vars
+			);
+			// printf("filter_out[0][0]: %f\n", filter_out[0][0]);
+			// printf("filter_linear_out[0][0]: %f\n", filter_linear_out[0][0]);
+			// printf("mix_out[0][0]: %f\n", mix_out[0][0]);
 
 			for (int ch = 0; ch < C; ch++)
 			{
@@ -379,7 +392,13 @@ renderCUDA(
 			// if (at_boundary) {
 			// 	printf("pix: %d %d, uv %.3f %.3f\n", pix.x, pix.y, uv.x, uv.y);
 			// }
-			if (!at_boundary) net.backward(net_input, dL_dcolor, dL_duv, false);
+			if (!at_boundary) {
+				net.backward(
+					net_input, dL_dcolor, dL_duv, 
+					filter_out, filter_linear_out, mix_out, gabor_inter_vars,
+					false
+				);
+			}
 
 			float dL_dz = 0.0f;
 			float dL_dweight = 0;

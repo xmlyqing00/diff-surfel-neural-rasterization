@@ -156,7 +156,7 @@ public:
 		out_linear = LinearLayer(GABOR_HIDDEN_DIM, GABOR_OUT_DIM);
 	}
 
-	__device__ void forward(const float * input, float * output, bool debug) const {
+	__device__ void forward(const float input[GABOR_IN_DIM], float output[GABOR_OUT_DIM], bool debug) const {
 		
 		float filter_out[GABOR_HIDDEN_DIM];
 		GaborInterVars gabor_inter_vars;
@@ -193,14 +193,40 @@ public:
 
 	}
 
-	__device__ void backward(const float * input, const float * dL_dcolor, float * dL_input, bool debug) {
-
-		float filter_out[GABOR_LAYER_NUM + 1][GABOR_HIDDEN_DIM];
-		float filter_linear_out[GABOR_LAYER_NUM][GABOR_HIDDEN_DIM];
-		float mix_out[GABOR_LAYER_NUM][GABOR_HIDDEN_DIM];
-
-		GaborInterVars gabor_inter_vars[GABOR_LAYER_NUM + 1];
+	__device__ void forward_and_save_inter_vars(
+		const float * input, float * output, 
+		float filter_out[][GABOR_HIDDEN_DIM], float filter_linear_out[][GABOR_HIDDEN_DIM], float mix_out[][GABOR_HIDDEN_DIM], 
+		GaborInterVars gabor_inter_vars[GABOR_LAYER_NUM + 1]
+	) {
 		gabor_layers[0].forward(input, filter_out[0], gabor_inter_vars[0]);
+
+		int i = 1;
+		// int offset_cur = i * GABOR_HIDDEN_DIM;
+		// int offset_last = offset_cur - GABOR_HIDDEN_DIM;
+		linear_layers[i - 1].forward(filter_out[i - 1], filter_linear_out[i - 1]);
+	
+		gabor_layers[i].forward(input, filter_out[i], gabor_inter_vars[i]);
+			
+		for (int j = 0; j < GABOR_HIDDEN_DIM; j++) {
+			mix_out[0][j] = filter_out[1][j] * filter_linear_out[0][j];
+		}
+
+		out_linear.forward(mix_out[0], output);
+	}
+
+	__device__ void backward(
+		const float * input, const float * dL_dcolor, float * dL_input, 
+		float filter_out[][GABOR_HIDDEN_DIM], float filter_linear_out[][GABOR_HIDDEN_DIM], float mix_out[][GABOR_HIDDEN_DIM], 
+		GaborInterVars gabor_inter_vars[GABOR_LAYER_NUM + 1],
+		bool debug
+	) {
+
+		// float filter_out[GABOR_LAYER_NUM + 1][GABOR_HIDDEN_DIM];
+		// float filter_linear_out[GABOR_LAYER_NUM][GABOR_HIDDEN_DIM];
+		// float mix_out[GABOR_LAYER_NUM][GABOR_HIDDEN_DIM];
+
+		// GaborInterVars gabor_inter_vars[GABOR_LAYER_NUM + 1];
+		// gabor_layers[0].forward(input, filter_out[0], gabor_inter_vars[0]);
 		
 		// for (int i = 1; i <= GABOR_LAYER_NUM; i++) {
 		// 	if (i == 1) {
@@ -213,16 +239,16 @@ public:
 		// 		mix_out[i - 1][j] = filter_out[i][j] * filter_linear_out[i - 1][j];
 		// 	}
 		// }
-		linear_layers[0].forward(filter_out[0], filter_linear_out[0]);
+		// linear_layers[0].forward(filter_out[0], filter_linear_out[0]);
 		// if (debug) {
 		// 	printf("back in: %.8f %.8f, filter_out: %.8f %.8f, filter_linear_out: %.8f %.8f\n", input[0], input[1], filter_out[0][0], filter_out[0][1], filter_linear_out[0][0], filter_linear_out[0][1]);
 		// 	printf("back linear weights %.8f %.8f %.8f %.8f, bias %.8f %.8f\n", linear_layers[0].weight[0], linear_layers[0].weight[1], linear_layers[0].weight[2], linear_layers[0].weight[3], linear_layers[0].bias[0], linear_layers[0].bias[1]);
 		// }
 		
-		gabor_layers[1].forward(input, filter_out[1], gabor_inter_vars[1]);
-		for (int j = 0; j < GABOR_HIDDEN_DIM; j++) {
-			mix_out[0][j] = filter_out[1][j] * filter_linear_out[0][j];
-		}
+		// gabor_layers[1].forward(input, filter_out[1], gabor_inter_vars[1]);
+		// for (int j = 0; j < GABOR_HIDDEN_DIM; j++) {
+			// mix_out[0][j] = filter_out[1][j] * filter_linear_out[0][j];
+		// }
 		// if (debug) {
 		// 	printf("back in: %.8f %.8f, mix_filter_out: %.8f %.8f, filter_out1 %.8f, %.8f, filter_linear_out: %.8f %.8f\n", 
 		// 	input[0], input[1], mix_out[0][0], mix_out[0][1], filter_out[1][0], filter_out[1][1], filter_linear_out[0][0], filter_linear_out[0][1]

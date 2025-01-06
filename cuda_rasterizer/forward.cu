@@ -286,17 +286,18 @@ renderCUDA(
 
 	// Load start/end range of IDs to process in bit sorted list.
 	uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
-	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
+	const int round_size = BLOCK_SIZE;
+	const int rounds = ((range.y - range.x + round_size - 1) / round_size);
 	int toDo = range.y - range.x;
 
 	// Allocate storage for batches of collectively fetched data.
-	__shared__ int collected_id[BLOCK_SIZE];
-	__shared__ float2 collected_xy[BLOCK_SIZE];
-	__shared__ float4 collected_normal_opacity[BLOCK_SIZE];
-	__shared__ float3 collected_Tu[BLOCK_SIZE];
-	__shared__ float3 collected_Tv[BLOCK_SIZE];
-	__shared__ float3 collected_Tw[BLOCK_SIZE];
-	__shared__ Network collected_net[16];
+	__shared__ int collected_id[round_size];
+	__shared__ float2 collected_xy[round_size];
+	__shared__ float4 collected_normal_opacity[round_size];
+	__shared__ float3 collected_Tu[round_size];
+	__shared__ float3 collected_Tv[round_size];
+	__shared__ float3 collected_Tw[round_size];
+	// __shared__ Network collected_net[round_size];
 
 	// Initialize helper variables
 	float T = 1.0f;
@@ -320,16 +321,16 @@ renderCUDA(
 #endif
 
 	// Iterate over batches until all done or range is complete
-	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
+	for (int i = 0; i < rounds; i++, toDo -= round_size)
 	{
 		// End if entire block votes that it is done rasterizing
 		int num_done = __syncthreads_count(done);
-		if (num_done == BLOCK_SIZE)
+		if (num_done == round_size)
 			break;
 
 		// Collectively fetch per-Gaussian data from global to shared
 		// int thread_rank = block.thread_rank();
-		int progress = i * BLOCK_SIZE + block.thread_rank();
+		int progress = i * round_size + block.thread_rank();
 		if (range.x + progress < range.y)
 		{
 			int coll_id = point_list[range.x + progress];
@@ -339,19 +340,19 @@ renderCUDA(
 			collected_Tu[block.thread_rank()] = {transMats[9 * coll_id+0], transMats[9 * coll_id+1], transMats[9 * coll_id+2]};
 			collected_Tv[block.thread_rank()] = {transMats[9 * coll_id+3], transMats[9 * coll_id+4], transMats[9 * coll_id+5]};
 			collected_Tw[block.thread_rank()] = {transMats[9 * coll_id+6], transMats[9 * coll_id+7], transMats[9 * coll_id+8]};
-			// if (block.thread_rank() >= BLOCK_SIZE) {
-			// 	printf("exceeding !!! block_thread_rank: %d, block_size %d\n", block.thread_rank(), BLOCK_SIZE);
+			// if (block.thread_rank() >= round_size) {
+			// 	printf("exceeding !!! block_thread_rank: %d, round_size %d\n", block.thread_rank(), round_size);
 			// }
-			collected_net[block.thread_rank()] = Network();
+			// collected_net[block.thread_rank()] = Network();
 			// collected_net[block.thread_rank()] = GaborInterVars();
-			printf("initialized. %d\n", sizeof(Network));
+			// printf("initialized. %d\n", sizeof(Network));
 			// printf("collected_net[block.thread_rank()].filters %p, linears %p\n", collected_net[block.thread_rank()].gabor_layers, collected_net[block.thread_rank()].linear_layers);
 			// params->get_params(coll_id, collected_net[block.thread_rank()], false);
 		}
 		block.sync();
 
 		// Iterate over current batch
-		for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++)
+		for (int j = 0; !done && j < min(round_size, toDo); j++)
 		{
 			// Keep track of current position in range
 			contributor++;
@@ -524,8 +525,8 @@ void FORWARD::render(
 {
 	cudaDeviceProp prop;
 	cudaGetDeviceProperties(&prop, 0); // Query device 0
-	printf("Shared memory per SM: %d KB\n", prop.sharedMemPerMultiprocessor / 1024);
-	printf("Shared memory per block: %d KB\n", prop.sharedMemPerBlock / 1024);
+	// printf("Shared memory per SM: %d KB\n", prop.sharedMemPerMultiprocessor / 1024);
+	// printf("Shared memory per block: %d KB\n", prop.sharedMemPerBlock / 1024);
 
 	renderCUDA<COLOR_CHANNELS> << <grid, block >> > (
 		ranges,
