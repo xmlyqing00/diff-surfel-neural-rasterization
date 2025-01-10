@@ -7,8 +7,8 @@
 
 typedef long long ll;
 #define GABOR_IN_DIM 2
-#define GABOR_HIDDEN_DIM 8
-#define GABOR_OUT_DIM 4
+#define GABOR_HIDDEN_DIM 4
+#define GABOR_OUT_DIM 3
 #define GABOR_LAYER_NUM 1
 
 

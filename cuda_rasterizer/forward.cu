@@ -303,8 +303,8 @@ renderCUDA(
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
-	float C[COLOR_CHANNELS + 1] = { 0 };
-	float net_res[COLOR_CHANNELS + 1] = {0};
+	float C[COLOR_CHANNELS] = { 0 };
+	float net_res[COLOR_CHANNELS] = {0};
 
 
 #if RENDER_AXUTILITY
