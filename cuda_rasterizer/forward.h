@@ -24,12 +24,13 @@
 namespace FORWARD
 {
 	// Perform initial steps for each Gaussian prior to rasterization.
-	void preprocess(int P,
+	void preprocess(int P, int D, int M,
 		const float* orig_points,
 		const glm::vec2* scales,
 		const float scale_modifier,
 		const glm::vec4* rotations,
 		const float* opacities,
+		const float* shs,
 		bool* clamped,
 		const float* transMat_precomp,
 		const float* colors_precomp,
@@ -66,7 +67,8 @@ namespace FORWARD
 		uint32_t* n_contrib,
 		const float* bg_color,
 		float* out_color,
-		float* out_others);
+		float* out_others,
+		bool neural_offset);
 }
 
 

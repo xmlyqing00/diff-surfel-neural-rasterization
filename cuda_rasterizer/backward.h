@@ -43,13 +43,15 @@ namespace BACKWARD
 		float* dL_dnormal3D,
 		float* dL_dopacity,
 		float* dL_dcolors,
-		Params* params
+		Params* params,
+		bool neural_offset
 	);
 
 	void preprocess(
-		int P,
+		int P, int D, int M,
 		const float3* means,
 		const int* radii,
+		const float* shs,
 		const bool* clamped,
 		const glm::vec2* scales,
 		const glm::vec4* rotations,
@@ -63,7 +65,8 @@ namespace BACKWARD
 		float3* dL_dmean2D,
 		const float* dL_dnormal3D,
 		float* dL_dtransMat,
-		float* dL_dcolor,
+		float* dL_dcolors,
+		float* dL_dshs,
 		glm::vec3* dL_dmeans,
 		glm::vec2* dL_dscale,
 		glm::vec4* dL_drot);

@@ -7,8 +7,8 @@
 
 typedef long long ll;
 #define GABOR_IN_DIM 2
-#define GABOR_HIDDEN_DIM 4
-#define GABOR_OUT_DIM 3
+#define GABOR_HIDDEN_DIM 8
+#define GABOR_OUT_DIM 4
 #define GABOR_LAYER_NUM 1
 
 
@@ -215,7 +215,7 @@ public:
 	}
 
 	__device__ void backward(
-		const float * input, const float * dL_dcolor, float * dL_input, 
+		const float * input, const float * dL_dcolor, float * dL_dinput, 
 		float filter_out[][GABOR_HIDDEN_DIM], float filter_linear_out[][GABOR_HIDDEN_DIM], float mix_out[][GABOR_HIDDEN_DIM], 
 		GaborInterVars gabor_inter_vars[GABOR_LAYER_NUM + 1],
 		bool debug
@@ -269,8 +269,8 @@ public:
 			dL_dfilter0_linear_out[i] = dL_dmix_out[i] * filter_out[1][i];
 		}
 
-		float dL_dinput[GABOR_IN_DIM] = {0};
-		gabor_layers[1].backward(input, dL_dfilter1_out, dL_dinput, gabor_inter_vars[1]);
+		float dL_dinput_gabor_layer1[GABOR_IN_DIM] = {0};
+		gabor_layers[1].backward(input, dL_dfilter1_out, dL_dinput_gabor_layer1, gabor_inter_vars[1]);
 
 		float dL_dfilter0_out[GABOR_HIDDEN_DIM] = {0};
 		linear_layers[0].backward(filter_out[0], dL_dfilter0_linear_out, dL_dfilter0_out);
@@ -278,7 +278,12 @@ public:
 		// 	printf("back input %.8f %.8f, dL_dfilter0_linear_out: %.8f %.8f, filter_out0: %.8f %.8f, dL_dfilter0_out: %.8f %.8f\n", input[0], input[1], dL_dfilter0_linear_out[0], dL_dfilter0_linear_out[1], filter_out[0][0], filter_out[0][1], dL_dfilter0_out[0], dL_dfilter0_out[1]);
 		// }
 
-		gabor_layers[0].backward(input, dL_dfilter0_out, dL_input, gabor_inter_vars[0]);
+		float dL_dinput_gabor_layer0[GABOR_IN_DIM] = {0};
+		gabor_layers[0].backward(input, dL_dfilter0_out, dL_dinput_gabor_layer0, gabor_inter_vars[0]);
+
+		for (int i = 0; i < GABOR_IN_DIM; i++) {
+			dL_dinput[i] = dL_dinput_gabor_layer0[i] + dL_dinput_gabor_layer1[i];
+		}
 
 
 		// float filter_out[GABOR_LAYER_NUM + 1][GABOR_HIDDEN_DIM];

@@ -146,12 +146,13 @@ __device__ bool compute_aabb(
 
 // Perform initial steps for each Gaussian prior to rasterization.
 template<int C>
-__global__ void preprocessCUDA(int P,
+__global__ void preprocessCUDA(int P, int D, int M,
 	const float* orig_points,
 	const glm::vec2* scales,
 	const float scale_modifier,
 	const glm::vec4* rotations,
 	const float* opacities,
+	const float* shs,
 	bool* clamped,
 	const float* transMat_precomp,
 	const float* colors_precomp,
@@ -164,6 +165,7 @@ __global__ void preprocessCUDA(int P,
 	int* radii,
 	float2* points_xy_image,
 	float* depths,	float* transMats,
+	float* rgb,
 	float4* normal_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
@@ -233,12 +235,12 @@ __global__ void preprocessCUDA(int P,
 		return;
 
 	// Compute colors 
-	// if (colors_precomp == nullptr) {
-	// 	glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
-	// 	rgb[idx * C + 0] = result.x;
-	// 	rgb[idx * C + 1] = result.y;
-	// 	rgb[idx * C + 2] = result.z;
-	// }
+	if (colors_precomp == nullptr) {
+		glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
+		rgb[idx * C + 0] = result.x;
+		rgb[idx * C + 1] = result.y;
+		rgb[idx * C + 2] = result.z;
+	}
 
 	depths[idx] = p_view.z;
 	radii[idx] = (int)radius;
@@ -268,7 +270,8 @@ renderCUDA(
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
-	float* __restrict__ out_others)
+	float* __restrict__ out_others,
+	bool neural_offset)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -304,7 +307,7 @@ renderCUDA(
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
 	float C[COLOR_CHANNELS] = { 0 };
-	float net_res[COLOR_CHANNELS] = {0};
+	float net_res[GABOR_OUT_DIM] = {0};
 
 
 #if RENDER_AXUTILITY
@@ -378,7 +381,7 @@ renderCUDA(
 			float2 s = {p.x / p.z, p.y / p.z};
 			float rho3d = (s.x * s.x + s.y * s.y); 
 			// Add low pass filter
-			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
+			float2 d = {pixf.x - xy.x, pixf.y - xy.y};
 			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
 
 			// float rho = min(rho3d, rho2d);
@@ -399,28 +402,49 @@ renderCUDA(
 			float normal[3] = {nor_o.x, nor_o.y, nor_o.z};
 			float opa = nor_o.w;
 
-			float power = -1.0f * rho;
-			if (power > 0.0f)
-				continue;
+			if (neural_offset) {
+				Network net;
+				params->get_params(collected_id[j], net, false);
+				float uv_[2] = {uv.x, uv.y};
+				
+				// if (pix.x >= 200 && pix.x <= 300 && pix.x % 20 == 0 && pix.y == 250) {
+				// 	net.forward(uv_, net_res, true);
+				// 	// printf("pix: %d, %d, uv: %f, %f, net_res: %.4f %.4f %.4f\n", pix.x, pix.y, uv.x, uv.y, net_res[0], net_res[1], net_res[2]);
+				// } else {
+				// 	net.forward(uv_, net_res, false);
+				// }
+				// collected_net[j].forward(uv_, net_res, false);
+				// collected_net[j].forward(uv_, net_res, false);
+				net.forward(uv_, net_res, false);
 
-			// Eq. (2) from 3D Gaussian splatting paper.
-			// Obtain alpha by multiplying with Gaussian opacity
-			// and its exponential falloff from mean.
-			// Avoid numerical instabilities (see paper appendix). 
-			const float G = exp(power);
-			if (G < threshold_visible) continue;
-			float alpha = opa;
-			// bool at_boundary = false;
-			if (G < threshold_boundary) {
-				alpha = opa * G / threshold_boundary;
+				for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
+					C[ch] += net_res[ch] * w;
+				}
+				opa = net_res[3];
+			} else {
+				float power = -0.5f * rho;
+				if (power > 0.0f)
+					continue;
 
-				// set uv to the boundary of the surface
-				float uv_length = sqrt(uv.x * uv.x + uv.y * uv.y);
-				float2 uv_normalized = {uv.x / uv_length, uv.y / uv_length};
-				float uv_s = sqrt(-2 * log(threshold_boundary));
-				uv = {uv_s * uv_normalized.x, uv_s * uv_normalized.y};
-				// at_boundary = true;
+				// Eq. (2) from 3D Gaussian splatting paper.
+				// Obtain alpha by multiplying with Gaussian opacity
+				// and its exponential falloff from mean.
+				// Avoid numerical instabilities (see paper appendix). 
+				const float G = exp(power);
+				float alpha = opa;
+				if (G < threshold_boundary) {
+					alpha = opa * G / threshold_boundary;
+
+					// // set uv to the boundary of the surface
+					// float uv_length = sqrt(uv.x * uv.x + uv.y * uv.y);
+					// float2 uv_normalized = {uv.x / uv_length, uv.y / uv_length};
+					// float uv_s = sqrt(-2 * log(threshold_boundary));
+					// uv = {uv_s * uv_normalized.x, uv_s * uv_normalized.y};
+				}
 			}
+
+			
+			
 			alpha = min(0.99f, alpha);
 			if (alpha < threshold_visible) continue;
 
@@ -452,27 +476,16 @@ renderCUDA(
 #endif
 
 			// Eq. (3) from 3D Gaussian splatting paper.
-			// for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
-				// C[ch] += features[collected_id[j] * COLOR_CHANNELS + ch] * w;
-			// }
-			
-			Network net;
-			params->get_params(collected_id[j], net, false);
-			float uv_[2] = {uv.x, uv.y};
-			
-			// if (pix.x >= 200 && pix.x <= 300 && pix.x % 20 == 0 && pix.y == 250) {
-			// 	net.forward(uv_, net_res, true);
-			// 	// printf("pix: %d, %d, uv: %f, %f, net_res: %.4f %.4f %.4f\n", pix.x, pix.y, uv.x, uv.y, net_res[0], net_res[1], net_res[2]);
-			// } else {
-			// 	net.forward(uv_, net_res, false);
-			// }
-			// collected_net[j].forward(uv_, net_res, false);
-			// collected_net[j].forward(uv_, net_res, false);
-			net.forward(uv_, net_res, false);
-
 			for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
-				C[ch] += net_res[ch] * w;
+				C[ch] += features[collected_id[j] * COLOR_CHANNELS + ch] * w;
 			}
+
+			if (!at_boundary) {
+
+				
+				
+			}
+			
 				
 			T = test_T;
 
@@ -521,7 +534,8 @@ void FORWARD::render(
 	uint32_t* n_contrib,
 	const float* bg_color,
 	float* out_color,
-	float* out_others)
+	float* out_others,
+	bool neural_offset)
 {
 	cudaDeviceProp prop;
 	cudaGetDeviceProperties(&prop, 0); // Query device 0
@@ -543,15 +557,17 @@ void FORWARD::render(
 		n_contrib,
 		bg_color,
 		out_color,
-		out_others);
+		out_others,
+		neural_offset);
 }
 
-void FORWARD::preprocess(int P,
+void FORWARD::preprocess(int P, int D, int M,
 	const float* means3D,
 	const glm::vec2* scales,
 	const float scale_modifier,
 	const glm::vec4* rotations,
 	const float* opacities,
+	const float* shs,
 	bool* clamped,
 	const float* transMat_precomp,
 	const float* colors_precomp,
@@ -572,12 +588,13 @@ void FORWARD::preprocess(int P,
 	bool prefiltered)
 {
 	preprocessCUDA<COLOR_CHANNELS> << <(P + 255) / 256, 256 >> > (
-		P, 
+		P, D, M,
 		means3D,
 		scales,
 		scale_modifier,
 		rotations,
 		opacities,
+		shs,
 		clamped,
 		transMat_precomp,
 		colors_precomp,
@@ -591,6 +608,7 @@ void FORWARD::preprocess(int P,
 		means2D,
 		depths,
 		transMats,
+		rgb,
 		normal_opacity,
 		grid,
 		tiles_touched,

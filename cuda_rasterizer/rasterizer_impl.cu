@@ -199,10 +199,11 @@ int CudaRasterizer::Rasterizer::forward(
 	std::function<char* (size_t)> geometryBuffer,
 	std::function<char* (size_t)> binningBuffer,
 	std::function<char* (size_t)> imageBuffer,
-	const int P,
+	const int P, int D, int M,
 	const float* background,
 	const int width, int height,
 	const float* means3D,
+	const float* shs,
 	const float* colors_precomp,
 	const float* opacities,
 	const float* scales,
@@ -218,6 +219,7 @@ int CudaRasterizer::Rasterizer::forward(
 	float* out_color,
 	float* out_others,
 	int* radii,
+	bool neural_offset,
 	bool debug)
 {
 	const float focal_y = height / (2.0f * tan_fovy);
@@ -242,12 +244,13 @@ int CudaRasterizer::Rasterizer::forward(
 
 	// Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
 	CHECK_CUDA(FORWARD::preprocess(
-		P,
+		P, D, M,
 		means3D,
 		(glm::vec2*)scales,
 		scale_modifier,
 		(glm::vec4*)rotations,
 		opacities,
+		shs,
 		geomState.clamped,
 		transMat_precomp,
 		colors_precomp,
@@ -331,7 +334,8 @@ int CudaRasterizer::Rasterizer::forward(
 		imgState.n_contrib,
 		background,
 		out_color,
-		out_others), debug)
+		out_others,
+		neural_offset), debug)
 
 	return num_rendered;
 }
@@ -339,10 +343,11 @@ int CudaRasterizer::Rasterizer::forward(
 // Produce necessary gradients for optimization, corresponding
 // to forward render pass
 void CudaRasterizer::Rasterizer::backward(
-	const int P, int R,
+	const int P, int D, int M, int R,
 	const float* background,
 	const int width, int height,
 	const float* means3D,
+	const float* shs,
 	const float* colors_precomp,
 	const float* scales,
 	const float scale_modifier,
@@ -364,9 +369,11 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dcolor,
 	float* dL_dmean3D,
 	float* dL_dtransMat,
+	float* dL_dsh,
 	float* dL_dscale,
 	float* dL_drot,
 	Params * params,
+	bool neural_offset,
 	bool debug)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
@@ -413,16 +420,18 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dnormal,
 		dL_dopacity,
 		dL_dcolor,
-		params
+		params,
+		neural_offset
 		), debug)
 
 	// Take care of the rest of preprocessing. Was the precomputed covariance
 	// given to us or a scales/rot pair? If precomputed, pass that. If not,
 	// use the one we computed ourselves.
 	// const float* transMat_ptr = (transMat_precomp != nullptr) ? transMat_precomp : geomState.transMat;
-	CHECK_CUDA(BACKWARD::preprocess(P,
+	CHECK_CUDA(BACKWARD::preprocess(P, D, M,
 		(float3*)means3D,
 		radii,
+		shs,
 		geomState.clamped,
 		(glm::vec2*)scales,
 		(glm::vec4*)rotations,
@@ -437,6 +446,7 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dnormal,		     // gradient inputs
 		dL_dtransMat,
 		dL_dcolor,
+		dL_dsh,
 		(glm::vec3*)dL_dmean3D,
 		(glm::vec2*)dL_dscale,
 		(glm::vec4*)dL_drot), debug)
