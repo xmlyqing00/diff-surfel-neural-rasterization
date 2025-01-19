@@ -46,9 +46,8 @@ RasterizeGaussiansCUDA(
 	const torch::Tensor& opacity,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
-	const torch::Tensor& gabor_filters,
-	const torch::Tensor& gabor_linears,
-	const torch::Tensor& gabor_out_linear,
+	const torch::Tensor& color_net,
+	const torch::Tensor& alpha_net,
 	const float scale_modifier,
 	const torch::Tensor& transMat_precomp,
 	const torch::Tensor& viewmatrix,
@@ -84,9 +83,8 @@ RasterizeGaussiansCUDA(
   CHECK_INPUT(projmatrix);
   CHECK_INPUT(sh);
   CHECK_INPUT(campos);
-  CHECK_INPUT(gabor_filters);
-  CHECK_INPUT(gabor_linears);
-  CHECK_INPUT(gabor_out_linear);
+  CHECK_INPUT(color_net);
+  CHECK_INPUT(alpha_net);
 
   auto int_opts = means3D.options().dtype(torch::kInt32);
   auto float_opts = means3D.options().dtype(torch::kFloat32);
@@ -104,12 +102,6 @@ RasterizeGaussiansCUDA(
   std::function<char*(size_t)> binningFunc = resizeFunctional(binningBuffer);
   std::function<char*(size_t)> imgFunc = resizeFunctional(imgBuffer);
 
-  Params params_host;
-  params_host.set_params(gabor_filters, gabor_linears, gabor_out_linear);
-  Params* params;
-  cudaMalloc(&params, sizeof(Params));
-  cudaMemcpy(params, &params_host, sizeof(Params), cudaMemcpyHostToDevice);
-  
   int rendered = 0;
   if(P != 0)
   {
@@ -132,7 +124,8 @@ RasterizeGaussiansCUDA(
 		scales.contiguous().data_ptr<float>(),
 		scale_modifier,
 		rotations.contiguous().data_ptr<float>(),
-		params,
+		color_net.contiguous().data<float>(),
+		alpha_net.contiguous().data<float>(),
 		transMat_precomp.contiguous().data<float>(), 
 		viewmatrix.contiguous().data<float>(), 
 		projmatrix.contiguous().data<float>(),
@@ -147,12 +140,10 @@ RasterizeGaussiansCUDA(
 		debug);
   }
 
-  cudaFree(params);
-
   return std::make_tuple(rendered, out_color, out_others, radii, geomBuffer, binningBuffer, imgBuffer);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
  RasterizeGaussiansBackwardCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -160,9 +151,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const torch::Tensor& colors,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
-	const torch::Tensor& gabor_filters,
-	const torch::Tensor& gabor_linears,
-	const torch::Tensor& gabor_out_linear,
+	const torch::Tensor& color_net,
+	const torch::Tensor& alpha_net,
 	const float scale_modifier,
 	const torch::Tensor& transMat_precomp,
 	const torch::Tensor& viewmatrix,
@@ -196,9 +186,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   CHECK_INPUT(binningBuffer);
   CHECK_INPUT(imageBuffer);
   CHECK_INPUT(geomBuffer);
-  CHECK_INPUT(gabor_filters);
-  CHECK_INPUT(gabor_linears);
-  CHECK_INPUT(gabor_out_linear);
+  CHECK_INPUT(color_net);
+  CHECK_INPUT(alpha_net);
 
   const int P = means3D.size(0);
   const int H = dL_dout_color.size(1);
@@ -219,16 +208,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   torch::Tensor dL_dsh = torch::zeros({P, M, 3}, means3D.options());
   torch::Tensor dL_dscales = torch::zeros({P, 2}, means3D.options());
   torch::Tensor dL_drotations = torch::zeros({P, 4}, means3D.options());
-  torch::Tensor dL_dgabor_filters = torch::zeros_like(gabor_filters);
-  torch::Tensor dL_dgabor_linears = torch::zeros_like(gabor_linears);
-  torch::Tensor dL_dgabor_out_linear = torch::zeros_like(gabor_out_linear);
-
-  Params params_host;
-  params_host.set_params(gabor_filters, gabor_linears, gabor_out_linear);
-  params_host.set_grads(dL_dgabor_filters, dL_dgabor_linears, dL_dgabor_out_linear);
-  Params* params;
-  cudaMalloc(&params, sizeof(Params));
-  cudaMemcpy(params, &params_host, sizeof(Params), cudaMemcpyHostToDevice);
+  torch::Tensor dL_dcolor_net = torch::zeros_like(color_net);
+  torch::Tensor dL_dalpha_net = torch::zeros_like(alpha_net);
 
   if(P != 0)
   {  
@@ -241,6 +222,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  scales.data_ptr<float>(),
 	  scale_modifier,
 	  rotations.data_ptr<float>(),
+	  color_net.contiguous().data<float>(),
+	  alpha_net.contiguous().data<float>(),
 	  transMat_precomp.contiguous().data<float>(),
 	  viewmatrix.contiguous().data<float>(),
 	  projmatrix.contiguous().data<float>(),
@@ -262,16 +245,15 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  dL_dsh.contiguous().data<float>(),
 	  dL_dscales.contiguous().data<float>(),
 	  dL_drotations.contiguous().data<float>(),
-	  params,
+	  dL_dcolor_net.contiguous().data<float>(),
+	  dL_dalpha_net.contiguous().data<float>(),
 	  neural_offset,
 	  debug);
   }
 
-  cudaFree(params);
-
   return std::make_tuple(
 	dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dtransMat, dL_dsh, dL_dscales, dL_drotations,
-	dL_dgabor_filters, dL_dgabor_linears, dL_dgabor_out_linear
+	dL_dcolor_net, dL_dalpha_net
  );
 }
 

@@ -45,7 +45,8 @@ namespace CudaRasterizer
 			const float* scales,
 			const float scale_modifier,
 			const float* rotations,
-			const Params* params,
+			 float* color_net,
+			 float* alpha_net,
 			const float* transMat_precomp,
 			const float* viewmatrix,
 			const float* projmatrix,
@@ -59,7 +60,7 @@ namespace CudaRasterizer
 			bool debug = false);
 
 		static void backward(
-			const int P, int D, int M,  int R,
+			const int P, int D, int M, int R,
 			const float* background,
 			const int width, int height,
 			const float* means3D,
@@ -68,6 +69,8 @@ namespace CudaRasterizer
 			const float* scales,
 			const float scale_modifier,
 			const float* rotations,
+			 float* color_net,
+			 float* alpha_net,
 			const float* transMat_precomp,
 			const float* viewmatrix,
 			const float* projmatrix,
@@ -88,7 +91,8 @@ namespace CudaRasterizer
 			float* dL_dsh,
 			float* dL_dscale,
 			float* dL_drot,
-			Params* params,
+			float* dL_dcolor_net,
+			float* dL_dalpha_net,
 			bool neural_offset,
 			bool debug);
 	};

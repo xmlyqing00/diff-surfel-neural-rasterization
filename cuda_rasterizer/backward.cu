@@ -150,6 +150,8 @@ renderCUDA(
 	const float* __restrict__ bg_color,
 	const float2* __restrict__ points_xy_image,
 	const float4* __restrict__ normal_opacity,
+	float* __restrict__ color_nets,
+	float* __restrict__ alpha_nets,
 	const float* __restrict__ transMats,
 	const float* __restrict__ colors,
 	const float* __restrict__ depths,
@@ -162,7 +164,8 @@ renderCUDA(
 	float* __restrict__ dL_dnormal3D,
 	float* __restrict__ dL_dopacity,
 	float* __restrict__ dL_dcolors,
-	Params* __restrict__ params,
+	float* __restrict__ dL_dcolor_net,
+	float* __restrict__ dL_dalpha_net,
 	bool neural_offset
 	)
 {
@@ -296,6 +299,7 @@ renderCUDA(
 			float rho3d = (s.x * s.x + s.y * s.y); 
 			float2 d = {pixf.x - xy.x, pixf.y - xy.y};
 			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
+			
 			// float rho = min(rho3d, rho2d);
 			float rho = rho3d;
 			float2 uv = s;
@@ -308,30 +312,78 @@ renderCUDA(
 			float c_d = (s.x * Tw.x + s.y * Tw.y) + Tw.z; // Tw * [u,v,1]
 			// if a point is too small, its depth is not reliable?
 			// c_d = (rho3d <= rho2d) ? c_d : Tw.z; 
+			if (pix.x == 250 && pix.y == 250) {
+				printf("pix: %d %d, c_d: %f\n", pix.x, pix.y, c_d);
+			}
 			if (c_d < near_n) continue;
 			
 			float4 nor_o = collected_normal_opacity[j];
 			float normal[3] = {nor_o.x, nor_o.y, nor_o.z};
 			float opa = nor_o.w;
+			float alpha, G;
+			const int global_id = collected_id[j];
+
+			Network<C_LAYER_NUM, C_IN_DIM, C_HIDDEN_DIM, C_OUT_DIM> color_net(
+				global_id, C_STRIDE, true,
+				color_nets, dL_dcolor_net, false
+			);
+			Network<A_LAYER_NUM, A_IN_DIM, A_HIDDEN_DIM, A_OUT_DIM> alpha_net(
+				global_id, A_STRIDE, true,
+				alpha_nets, dL_dalpha_net, true
+			);
+
+			const float net_input[C_IN_DIM] = {uv.x, uv.y};
+			float color_net_res[C_OUT_DIM] = {0};
+			float alpha_net_res[A_OUT_DIM] = {0};
+			
+			float color_net_filter_out[C_LAYER_NUM + 1][C_HIDDEN_DIM];
+			float color_net_filter_linear_out[C_LAYER_NUM][C_HIDDEN_DIM];
+			float color_net_mix_out[C_LAYER_NUM][C_HIDDEN_DIM];
+			float color_net_final_out[C_OUT_DIM];
+			GaborInterVars<C_HIDDEN_DIM> color_net_inter_vars[C_LAYER_NUM + 1];
+
+			float alpha_net_filter_out[A_LAYER_NUM + 1][A_HIDDEN_DIM];
+			float alpha_net_filter_linear_out[A_LAYER_NUM][A_HIDDEN_DIM];
+			float alpha_net_mix_out[A_LAYER_NUM][A_HIDDEN_DIM];
+			float alpha_net_final_out[C_OUT_DIM];
+			GaborInterVars<A_HIDDEN_DIM> alpha_net_inter_vars[A_LAYER_NUM + 1];
+
+			if (neural_offset) {
+
+				// net.forward(net_input, net_result, false);
+				bool network_debug = (pix.x == 250 && pix.y == 250)? true: false;
+				color_net.forward_and_save_inter_vars(
+					net_input, color_net_res,
+					color_net_filter_out, color_net_filter_linear_out, color_net_mix_out, color_net_final_out, color_net_inter_vars,
+					network_debug
+				);
+
+				alpha_net.forward_and_save_inter_vars(
+					net_input, alpha_net_res,
+					alpha_net_filter_out, alpha_net_filter_linear_out, alpha_net_mix_out, alpha_net_final_out, alpha_net_inter_vars,
+					network_debug
+				);
+				alpha = alpha_net_res[0];
+				// printf("filter_out[0][0]: %f\n", filter_out[0][0]);
+				// printf("filter_linear_out[0][0]: %f\n", filter_linear_out[0][0]);
+				// printf("mix_out[0][0]: %f\n", mix_out[0][0]);
+				if (pix.x == 250 && pix.y == 250) {
+					printf("pix: %d, %d, uv: %f, %f, alpha: %.4f, color %.4f %.4f %.4f\n", pix.x, pix.y, uv.x, uv.y, alpha, color_net_res[0], color_net_res[1], color_net_res[2]);
+				}
+				
+				
+			} else {
+				
+				float power = -0.5f * rho;
+				if (power > 0.0f)
+					continue;
+
+				G = exp(power);
+				alpha = G * opa;
+			}
 
 			// accumulations
 
-			float power = -1.0f * rho;
-			if (power > 0.0f)
-				continue;
-
-			const float G = exp(power);
-			if (G < threshold_visible) continue;
-			float alpha = opa;
-			bool at_boundary = false;
-			if (G < threshold_boundary) {
-				alpha = opa * G / threshold_boundary;
-				// float uv_length = sqrt(uv.x * uv.x + uv.y * uv.y);
-				// float2 uv_normalized = {uv.x / uv_length, uv.y / uv_length};
-				// float uv_s = sqrt(-2 * log(threshold_boundary));
-				// uv = {uv_s * uv_normalized.x, uv_s * uv_normalized.y};
-				at_boundary = true;
-			}
 			alpha = min(0.99f, alpha);
 			if (alpha < threshold_visible) continue;
 
@@ -341,7 +393,6 @@ renderCUDA(
 			// Propagate gradients to per-Gaussian colors and keep gradients
 			// w.r.t. alpha (blending factor for a Gaussian/pixel pair).
 			float dL_dalpha = 0.0f;
-			const int global_id = collected_id[j];
 			float dL_dcolor[COLOR_CHANNELS] = {0};
 
 			// forward to get color
@@ -349,34 +400,10 @@ renderCUDA(
 			for (int ch = 0; ch < C; ch++)
 			{
 				render_color[ch] = collected_colors[ch * BLOCK_SIZE + j];
-			}
-
-			Network net;
-			params->get_params(global_id, net, true);
-			float net_input[2] = {uv.x, uv.y};
-			
-			float filter_out[GABOR_LAYER_NUM + 1][GABOR_HIDDEN_DIM];
-			float filter_linear_out[GABOR_LAYER_NUM][GABOR_HIDDEN_DIM];
-			float mix_out[GABOR_LAYER_NUM][GABOR_HIDDEN_DIM];
-			GaborInterVars gabor_inter_vars[GABOR_LAYER_NUM + 1];
-			if (neural_offset && !at_boundary) {
-
-				float net_result[3] = {0};
-				// net.forward(net_input, net_result, false);
-				net.forward_and_save_inter_vars(
-					net_input, net_result,
-					filter_out, filter_linear_out, mix_out, gabor_inter_vars
-				);
-				// printf("filter_out[0][0]: %f\n", filter_out[0][0]);
-				// printf("filter_linear_out[0][0]: %f\n", filter_linear_out[0][0]);
-				// printf("mix_out[0][0]: %f\n", mix_out[0][0]);
-
-				for (int ch = 0; ch < C; ch++) {
-					render_color[ch] += net_result[ch];
+				if (neural_offset) {
+					render_color[ch] += color_net_res[ch];
 				}
 			}
-			
-			
 
 			for (int ch = 0; ch < C; ch++)
 			{
@@ -395,26 +422,24 @@ renderCUDA(
 				atomicAdd(&(dL_dcolors[global_id * C + ch]), dL_dcolor[ch]);
 			}
 
-			// backpropagate the gradients to the network
-			float dL_duv[2] = {0};
-			// if (pix.x >= 200 && pix.x <= 300 && pix.x % 20 == 0 && pix.y == 250) {
-			// 	printf("pix %d %d, dL_dpixel %.8f %.8f %.8f, dL_dcolor %.8f %.8f %.8f\n", pix.x, pix.y, dL_dpixel[0], dL_dpixel[1], dL_dpixel[2], dL_dcolor[0], dL_dcolor[1], dL_dcolor[2]);
-			// 	net.backward(net_input, dL_dcolor, dL_duv, true);
-			// } else {
-			// 	net.backward(net_input, dL_dcolor, dL_duv, false);
-			// }
-			// if (!at_boundary)
-			// if (at_boundary) {
-			// 	printf("pix: %d %d, uv %.3f %.3f\n", pix.x, pix.y, uv.x, uv.y);
-			// }
-			if (neural_offset && !at_boundary) {
-				net.backward(
-					net_input, dL_dcolor, dL_duv, 
-					filter_out, filter_linear_out, mix_out, gabor_inter_vars,
-					false
-				);
+			if (pix.x == 250 && pix.y == 250) {
+				printf("pix: %d %d, dL_dcolor: %6f %6f %6f\n", pix.x, pix.y, dL_dcolor[0], dL_dcolor[1], dL_dcolor[2]);
 			}
 			
+
+			float dL_dcolor_duv[2] = {0};
+			float dL_dalpha_duv[2] = {0};
+			float dL_dalphas[1] = {dL_dalpha};
+			if (neural_offset) {
+				bool debug = (pix.x == 250 && pix.y == 250)? true: false;
+				color_net.backward(
+					net_input, dL_dcolor, dL_dcolor_duv, 
+					color_net_filter_out, color_net_filter_linear_out, color_net_mix_out, color_net_final_out, color_net_inter_vars,
+					debug
+				);
+			}
+
+			// printf("pix: %d %d, dL_dcolor: %6f %6f %6f, dL_dcolor_duv: %6f %6f\n", pix.x, pix.y, dL_dcolor[0], dL_dcolor[1], dL_dcolor[2], dL_dcolor_duv[0], dL_dcolor_duv[1]);
 
 			float dL_dz = 0.0f;
 			float dL_dweight = 0;
@@ -466,77 +491,109 @@ renderCUDA(
 				bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
 			dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
 
-
-			// Helpful reusable temporary variables
-			float dL_dG;
-			if (at_boundary) {
-				dL_dG = dL_dalpha * opa / threshold_boundary;
-			} else {
-				dL_dG = 0;
-			}
 #if RENDER_AXUTILITY
 			dL_dz += alpha * T * dL_ddepth; 
 #endif
 
-			if (rho3d <= rho2d) {
+			if (neural_offset) {
+				// backpropagate the gradients to the network
 				
-				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
-				float2 dL_ds = {
-					dL_dG * -2 * G * s.x + dL_dz * Tw.x,
-					dL_dG * -2 * G * s.y + dL_dz * Tw.y
-				};
-				// if (neural_offset && !at_boundary) {
-				// 	dL_ds.x += dL_duv[0];
-				// 	dL_ds.y += dL_duv[1];
-				// }
-				const float3 dz_dTw = {s.x, s.y, 1.0};
-				const float dsx_pz = dL_ds.x / p.z;
-				const float dsy_pz = dL_ds.y / p.z;
-				const float3 dL_dp = {dsx_pz, dsy_pz, -(dsx_pz * s.x + dsy_pz * s.y)};
-				const float3 dL_dk = cross(l, dL_dp);
-				const float3 dL_dl = cross(dL_dp, k);
+				alpha_net.backward(
+					net_input, dL_dalphas, dL_dalpha_duv, 
+					alpha_net_filter_out, alpha_net_filter_linear_out, alpha_net_mix_out, alpha_net_final_out, alpha_net_inter_vars,
+					false
+				);
 
-				const float3 dL_dTu = {-dL_dk.x, -dL_dk.y, -dL_dk.z};
-				const float3 dL_dTv = {-dL_dl.x, -dL_dl.y, -dL_dl.z};
-				const float3 dL_dTw = {
-					pixf.x * dL_dk.x + pixf.y * dL_dl.x + dL_dz * dz_dTw.x, 
-					pixf.x * dL_dk.y + pixf.y * dL_dl.y + dL_dz * dz_dTw.y, 
-					pixf.x * dL_dk.z + pixf.y * dL_dl.z + dL_dz * dz_dTw.z};
+				if (rho3d <= rho2d) {
+					float2 dL_ds = {
+						dL_dz * Tw.x + dL_dcolor_duv[0] + dL_dalpha_duv[0],
+						dL_dz * Tw.y + dL_dcolor_duv[1] + dL_dalpha_duv[1]
+					};
+					float3 dz_dTw = {s.x, s.y, 1.0};
+					float dsx_pz = dL_ds.x / p.z;
+					float dsy_pz = dL_ds.y / p.z;
+					float3 dL_dp = {dsx_pz, dsy_pz, -(dsx_pz * s.x + dsy_pz * s.y)};
+					float3 dL_dk = cross(l, dL_dp);
+					float3 dL_dl = cross(dL_dp, k);
 
+					float3 dL_dTu = {-dL_dk.x, -dL_dk.y, -dL_dk.z};
+					float3 dL_dTv = {-dL_dl.x, -dL_dl.y, -dL_dl.z};
+					float3 dL_dTw = {
+						pixf.x * dL_dk.x + pixf.y * dL_dl.x + dL_dz * dz_dTw.x,
+						pixf.x * dL_dk.y + pixf.y * dL_dl.y + dL_dz * dz_dTw.y,
+						pixf.x * dL_dk.z + pixf.y * dL_dl.z + dL_dz * dz_dTw.z};
 
-				// Update gradients w.r.t. 3D covariance (3x3 matrix)
-				atomicAdd(&dL_dtransMat[global_id * 9 + 0],  dL_dTu.x);
-				atomicAdd(&dL_dtransMat[global_id * 9 + 1],  dL_dTu.y);
-				atomicAdd(&dL_dtransMat[global_id * 9 + 2],  dL_dTu.z);
-				atomicAdd(&dL_dtransMat[global_id * 9 + 3],  dL_dTv.x);
-				atomicAdd(&dL_dtransMat[global_id * 9 + 4],  dL_dTv.y);
-				atomicAdd(&dL_dtransMat[global_id * 9 + 5],  dL_dTv.z);
-				atomicAdd(&dL_dtransMat[global_id * 9 + 6],  dL_dTw.x);
-				atomicAdd(&dL_dtransMat[global_id * 9 + 7],  dL_dTw.y);
-				atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dTw.z);
+					// Update gradients w.r.t. 3D covariance (3x3 matrix)
+					atomicAdd(&dL_dtransMat[global_id * 9 + 0],  dL_dTu.x);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 1],  dL_dTu.y);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 2],  dL_dTu.z);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 3],  dL_dTv.x);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 4],  dL_dTv.y);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 5],  dL_dTv.z);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 6],  dL_dTw.x);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 7],  dL_dTw.y);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dTw.z);
+				} else {
+					atomicAdd(&dL_dmean2D[global_id].x, -dL_dcolor_duv[0] - dL_dalpha_duv[0]);
+					atomicAdd(&dL_dmean2D[global_id].y, -dL_dcolor_duv[1] - dL_dalpha_duv[1]); 
+					// Propagate the gradients of depth
+					atomicAdd(&dL_dtransMat[global_id * 9 + 6],  s.x * dL_dz);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 7],  s.y * dL_dz);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dz);
+				}
 			} else {
+				// Helpful reusable temporary variables
+				float dL_dG = dL_dalpha * opa;
+
+				if (rho3d <= rho2d) {
 				
-				// Update gradients w.r.t. center of Gaussian 2D mean position
-				const float dG_ddelx = -2 * G * FilterInvSquare * d.x;
-				const float dG_ddely = -2 * G * FilterInvSquare * d.y;
-				atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); 
-				atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely);
-				// if (neural_offset && !at_boundary) {
-				// 	atomicAdd(&dL_dmean2D[global_id].x, dL_duv[0]);
-				// 	atomicAdd(&dL_dmean2D[global_id].y, dL_duv[1]);
-				// }
-				// Propagate the gradients of depth
-				atomicAdd(&dL_dtransMat[global_id * 9 + 6],  s.x * dL_dz);
-				atomicAdd(&dL_dtransMat[global_id * 9 + 7],  s.y * dL_dz);
-				atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dz);
-			}
+					// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
+					float2 dL_ds = {
+						dL_dG * -G * s.x + dL_dz * Tw.x,
+						dL_dG * -G * s.y + dL_dz * Tw.y
+					};
+					const float3 dz_dTw = {s.x, s.y, 1.0};
+					const float dsx_pz = dL_ds.x / p.z;
+					const float dsy_pz = dL_ds.y / p.z;
+					const float3 dL_dp = {dsx_pz, dsy_pz, -(dsx_pz * s.x + dsy_pz * s.y)};
+					const float3 dL_dk = cross(l, dL_dp);
+					const float3 dL_dl = cross(dL_dp, k);
 
-			// Update gradients w.r.t. opacity of the Gaussian
-			if (at_boundary) {
-				// atomicAdd(&(dL_dopacity[global_id]), dL_dalpha * G / threshold_boundary);
-			} else {
-				atomicAdd(&(dL_dopacity[global_id]), dL_dalpha);
+					const float3 dL_dTu = {-dL_dk.x, -dL_dk.y, -dL_dk.z};
+					const float3 dL_dTv = {-dL_dl.x, -dL_dl.y, -dL_dl.z};
+					const float3 dL_dTw = {
+						pixf.x * dL_dk.x + pixf.y * dL_dl.x + dL_dz * dz_dTw.x, 
+						pixf.x * dL_dk.y + pixf.y * dL_dl.y + dL_dz * dz_dTw.y, 
+						pixf.x * dL_dk.z + pixf.y * dL_dl.z + dL_dz * dz_dTw.z};
+
+
+					// Update gradients w.r.t. 3D covariance (3x3 matrix)
+					atomicAdd(&dL_dtransMat[global_id * 9 + 0],  dL_dTu.x);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 1],  dL_dTu.y);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 2],  dL_dTu.z);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 3],  dL_dTv.x);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 4],  dL_dTv.y);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 5],  dL_dTv.z);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 6],  dL_dTw.x);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 7],  dL_dTw.y);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dTw.z);
+				} else {
+					
+					// Update gradients w.r.t. center of Gaussian 2D mean position
+					const float dG_ddelx = G * FilterInvSquare * d.x;
+					const float dG_ddely = G * FilterInvSquare * d.y;
+					atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); 
+					atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely);
+					// Propagate the gradients of depth
+					atomicAdd(&dL_dtransMat[global_id * 9 + 6],  s.x * dL_dz);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 7],  s.y * dL_dz);
+					atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dz);
+				}
+
+				// Update gradients w.r.t. opacity of the Gaussian
+				atomicAdd(&(dL_dopacity[global_id]), dL_dalpha * G);
 			}
+			
 		}
 	}
 }
@@ -556,7 +613,7 @@ __device__ void compute_transmat_aabb(
 	float* dL_dTs, 
 	glm::vec3* dL_dmeans, 
 	glm::vec2* dL_dscales,
-	 glm::vec4* dL_drots)
+	glm::vec4* dL_drots)
 {
 	glm::mat3 T;
 	float3 normal;
@@ -793,6 +850,8 @@ void BACKWARD::render(
 	const float* bg_color,
 	const float2* means2D,
 	const float4* normal_opacity,
+	float* color_net,
+	float* alpha_net,
 	const float* transMats,
 	const float* colors,
 	const float* depths,
@@ -805,7 +864,8 @@ void BACKWARD::render(
 	float* dL_dnormal3D,
 	float* dL_dopacity,
 	float* dL_dcolors,
-	Params * params,
+	float* dL_dcolor_net,
+	float* dL_dalpha_net,
 	bool neural_offset
 ) {
 	renderCUDA<COLOR_CHANNELS> << <grid, block >> >(
@@ -816,6 +876,8 @@ void BACKWARD::render(
 		bg_color,
 		means2D,
 		normal_opacity,
+		color_net,
+		alpha_net,
 		transMats,
 		colors,
 		depths,
@@ -828,7 +890,8 @@ void BACKWARD::render(
 		dL_dnormal3D,
 		dL_dopacity,
 		dL_dcolors,
-		params,
+		dL_dcolor_net,
+		dL_dalpha_net,
 		neural_offset
 	);
 }

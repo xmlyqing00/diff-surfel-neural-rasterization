@@ -31,6 +31,8 @@ namespace BACKWARD
 		const float* bg_color,
 		const float2* means2D,
 		const float4* normal_opacity,
+		 float* color_net,
+		 float* alpha_net,
 		const float* transMats,
 		const float* colors,
 		const float* depths,
@@ -43,7 +45,8 @@ namespace BACKWARD
 		float* dL_dnormal3D,
 		float* dL_dopacity,
 		float* dL_dcolors,
-		Params* params,
+		float* dL_dcolor_net,
+		float* dL_dalpha_net,
 		bool neural_offset
 	);
 

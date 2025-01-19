@@ -23,9 +23,8 @@ RasterizeGaussiansCUDA(
 	const torch::Tensor& opacity,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
-	const torch::Tensor& gabor_filters,
-	const torch::Tensor& gabor_linears,
-	const torch::Tensor& gabor_out_linear,
+	const torch::Tensor& color_net,
+	const torch::Tensor& alpha_net,
 	const float scale_modifier,
 	const torch::Tensor& transMat_precomp,
 	const torch::Tensor& viewmatrix,
@@ -41,7 +40,7 @@ RasterizeGaussiansCUDA(
 	const bool neural_offset,
 	const bool debug);
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
  RasterizeGaussiansBackwardCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -49,9 +48,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const torch::Tensor& colors,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
-	const torch::Tensor& gabor_filters,
-	const torch::Tensor& gabor_linears,
-	const torch::Tensor& gabor_out_linear,
+	const torch::Tensor& color_net,
+	const torch::Tensor& alpha_net,
 	const float scale_modifier,
 	const torch::Tensor& transMat_precomp,
 	const torch::Tensor& viewmatrix,

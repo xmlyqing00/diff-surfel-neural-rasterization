@@ -209,7 +209,8 @@ int CudaRasterizer::Rasterizer::forward(
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
-	const Params* params,
+	 float* color_net,
+	 float* alpha_net,
 	const float* transMat_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
@@ -329,7 +330,7 @@ int CudaRasterizer::Rasterizer::forward(
 		transMat_ptr,
 		geomState.depths,
 		geomState.normal_opacity,
-		params,
+		color_net, alpha_net,
 		imgState.accum_alpha,
 		imgState.n_contrib,
 		background,
@@ -352,6 +353,8 @@ void CudaRasterizer::Rasterizer::backward(
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
+	 float* color_net,
+	 float* alpha_net,
 	const float* transMat_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
@@ -372,7 +375,8 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dsh,
 	float* dL_dscale,
 	float* dL_drot,
-	Params * params,
+	float* dL_dcolor_net,
+	float* dL_dalpha_net,
 	bool neural_offset,
 	bool debug)
 {
@@ -408,6 +412,8 @@ void CudaRasterizer::Rasterizer::backward(
 		background,
 		geomState.means2D,
 		geomState.normal_opacity,
+		color_net,
+		alpha_net,
 		transMat_ptr,
 		color_ptr,
 		depth_ptr,
@@ -420,7 +426,8 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dnormal,
 		dL_dopacity,
 		dL_dcolor,
-		params,
+		dL_dcolor_net,
+		dL_dalpha_net,
 		neural_offset
 		), debug)
 

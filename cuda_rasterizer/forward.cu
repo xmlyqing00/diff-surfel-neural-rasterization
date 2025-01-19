@@ -265,7 +265,8 @@ renderCUDA(
 	const float* __restrict__ transMats,
 	const float* __restrict__ depths,
 	const float4* __restrict__ normal_opacity,
-	const Params* __restrict__ params,
+	float* __restrict__ color_nets,
+	float* __restrict__ alpha_nets,
 	float* __restrict__ final_T,
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
@@ -307,7 +308,8 @@ renderCUDA(
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
 	float C[COLOR_CHANNELS] = { 0 };
-	float net_res[GABOR_OUT_DIM] = {0};
+	float color_net_res[C_OUT_DIM] = {0};
+	float alpha_net_res[A_OUT_DIM] = {0};
 
 
 #if RENDER_AXUTILITY
@@ -401,11 +403,21 @@ renderCUDA(
 			float4 nor_o = collected_normal_opacity[j];
 			float normal[3] = {nor_o.x, nor_o.y, nor_o.z};
 			float opa = nor_o.w;
+			float alpha;
 
 			if (neural_offset) {
-				Network net;
-				params->get_params(collected_id[j], net, false);
-				float uv_[2] = {uv.x, uv.y};
+				bool debug_init = (pix.x == 250 && pix.y == 250)? true : false;
+				Network<C_LAYER_NUM, C_IN_DIM, C_HIDDEN_DIM, C_OUT_DIM> color_net(
+					collected_id[j], C_STRIDE, false,
+					color_nets, nullptr, false, debug_init
+				);
+				Network<A_LAYER_NUM, A_IN_DIM, A_HIDDEN_DIM, A_OUT_DIM> alpha_net(
+					collected_id[j], A_STRIDE, false,
+					alpha_nets, nullptr, true, debug_init
+				);
+				
+				// params->get_params(collected_id[j], net, false);
+				const float uv_[] = {uv.x, uv.y};
 				
 				// if (pix.x >= 200 && pix.x <= 300 && pix.x % 20 == 0 && pix.y == 250) {
 				// 	net.forward(uv_, net_res, true);
@@ -415,13 +427,14 @@ renderCUDA(
 				// }
 				// collected_net[j].forward(uv_, net_res, false);
 				// collected_net[j].forward(uv_, net_res, false);
-				net.forward(uv_, net_res, false);
+				color_net.forward(uv_, color_net_res, false);
+				alpha_net.forward(uv_, alpha_net_res, false);
+				alpha = alpha_net_res[0];
 
-				for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
-					C[ch] += net_res[ch] * w;
-				}
-				opa = net_res[3];
+				// printf("pix: %d, %d, uv: %f, %f, alpha: %.4f\n", pix.x, pix.y, uv.x, uv.y, alpha);
+
 			} else {
+
 				float power = -0.5f * rho;
 				if (power > 0.0f)
 					continue;
@@ -430,20 +443,8 @@ renderCUDA(
 				// Obtain alpha by multiplying with Gaussian opacity
 				// and its exponential falloff from mean.
 				// Avoid numerical instabilities (see paper appendix). 
-				const float G = exp(power);
-				float alpha = opa;
-				if (G < threshold_boundary) {
-					alpha = opa * G / threshold_boundary;
-
-					// // set uv to the boundary of the surface
-					// float uv_length = sqrt(uv.x * uv.x + uv.y * uv.y);
-					// float2 uv_normalized = {uv.x / uv_length, uv.y / uv_length};
-					// float uv_s = sqrt(-2 * log(threshold_boundary));
-					// uv = {uv_s * uv_normalized.x, uv_s * uv_normalized.y};
-				}
+				alpha = opa * exp(power);
 			}
-
-			
 			
 			alpha = min(0.99f, alpha);
 			if (alpha < threshold_visible) continue;
@@ -477,16 +478,18 @@ renderCUDA(
 
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
+
 				C[ch] += features[collected_id[j] * COLOR_CHANNELS + ch] * w;
-			}
+				if (neural_offset) {
+					C[ch] += color_net_res[ch] * w;
+				}
 
-			if (!at_boundary) {
-
-				
-				
+				if (C[ch] > 1000) {
+					printf("rho3d %f rho2d %f, uv %f %f, s %f %f\n", rho3d, rho2d, uv.x, uv.y, s.x, s.y);
+					printf("uv %.3f %.3f, pix %d %d, alpha %.3f, w %.3f, color %.3f\n", uv.x, uv.y, pix.x, pix.y, alpha, w, C[ch]);
+				}
 			}
 			
-				
 			T = test_T;
 
 			// Keep track of last range entry to update this
@@ -529,7 +532,8 @@ void FORWARD::render(
 	const float* transMats,
 	const float* depths,
 	const float4* normal_opacity,
-	const Params * params,
+	float* color_nets,
+	float* alpha_nets,
 	float* final_T,
 	uint32_t* n_contrib,
 	const float* bg_color,
@@ -552,7 +556,8 @@ void FORWARD::render(
 		transMats,
 		depths,
 		normal_opacity,
-		params,
+		color_nets, 
+		alpha_nets,
 		final_T,
 		n_contrib,
 		bg_color,
