@@ -110,7 +110,8 @@ class _RasterizeGaussians(torch.autograd.Function):
         num_rendered = ctx.num_rendered
         raster_settings = ctx.raster_settings
         colors_precomp, means3D, scales, rotations, color_net, alpha_net, cov3Ds_precomp, radii, sh, geomBuffer, binningBuffer, imgBuffer = ctx.saved_tensors
-
+        # print('grad_out_color.shape', grad_out_color.shape)
+        # print('grad_out_color', grad_out_color[:, 250, 250])
         # Restructure args as C++ method expects them
         args = (raster_settings.bg,
                 means3D, 
@@ -236,3 +237,7 @@ class GaussianRasterizer(nn.Module):
             raster_settings, 
         )
 
+
+def compute_relocation(opacity_old, scale_old, N, binoms, n_max):
+    new_opacity, new_scale = _C.compute_relocation(opacity_old, scale_old, N.int(), binoms, n_max)
+    return new_opacity, new_scale 

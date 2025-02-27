@@ -2,12 +2,13 @@
 #define CUDA_RASTERIZER_NETWORK_H
 
 #include <torch/extension.h>
+#define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
 #include <cmath>
 
 #define C_LAYER_NUM 1
 #define C_IN_DIM 2
-#define C_HIDDEN_DIM 8
+#define C_HIDDEN_DIM 128
 #define C_OUT_DIM 3
 
 #define A_LAYER_NUM 1
@@ -143,7 +144,7 @@ public:
 
 		for (int j = 0; j < hidden_dim; j++) {
 			inter_vars.sin_term[j] = sinf(inter_vars.linear_out[j]);
-			inter_vars.exp_term[j] = expf(-0.5f * inter_vars.D[j] * gamma[j]);
+			inter_vars.exp_term[j] = expf(-0.5f * inter_vars.D[j] * gamma[j] * gamma[j]);
 			output[j] = inter_vars.sin_term[j] * inter_vars.exp_term[j];
 		}
 	}
@@ -156,8 +157,8 @@ public:
 		float dL_dlin[hidden_dim] = {0};
 		for (int j = 0; j < hidden_dim; j++) {
 			dL_dlin[j] = dL_dout[j] * inter_vars.exp_term[j] * cosf(inter_vars.linear_out[j]);
-			dL_dD[j] = dL_dout[j] * inter_vars.sin_term[j] * inter_vars.exp_term[j] * (-0.5f * gamma[j]);
-			atomicAdd(&dgamma[j], dL_dout[j] * inter_vars.sin_term[j] * inter_vars.exp_term[j] * (-0.5f * inter_vars.D[j]));
+			dL_dD[j] = dL_dout[j] * inter_vars.sin_term[j] * inter_vars.exp_term[j] * (-0.5f * gamma[j] * gamma[j]);
+			atomicAdd(&dgamma[j], dL_dout[j] * inter_vars.sin_term[j] * inter_vars.exp_term[j] * (-1.0f * inter_vars.D[j] * gamma[j]));
 		}
 
 		float local_din[in_dim] = {0};

@@ -411,13 +411,13 @@ renderCUDA(
 					collected_id[j], C_STRIDE, false,
 					color_nets, nullptr, false, debug_init
 				);
-				Network<A_LAYER_NUM, A_IN_DIM, A_HIDDEN_DIM, A_OUT_DIM> alpha_net(
-					collected_id[j], A_STRIDE, false,
-					alpha_nets, nullptr, true, debug_init
-				);
+				// Network<A_LAYER_NUM, A_IN_DIM, A_HIDDEN_DIM, A_OUT_DIM> alpha_net(
+				// 	collected_id[j], A_STRIDE, false,
+				// 	alpha_nets, nullptr, true, debug_init
+				// );
 				
 				// params->get_params(collected_id[j], net, false);
-				const float uv_[] = {uv.x, uv.y};
+				const float uv_[] = {uv.x / 3, uv.y / 3};
 				
 				// if (pix.x >= 200 && pix.x <= 300 && pix.x % 20 == 0 && pix.y == 250) {
 				// 	net.forward(uv_, net_res, true);
@@ -428,8 +428,12 @@ renderCUDA(
 				// collected_net[j].forward(uv_, net_res, false);
 				// collected_net[j].forward(uv_, net_res, false);
 				color_net.forward(uv_, color_net_res, false);
-				alpha_net.forward(uv_, alpha_net_res, false);
-				alpha = alpha_net_res[0];
+				// alpha_net.forward(uv_, alpha_net_res, false);
+				// alpha = alpha_net_res[0];
+				float power = -0.5f * rho;
+				if (power > 0.0f)
+					continue;
+				alpha = opa * exp(power);
 
 				// printf("pix: %d, %d, uv: %f, %f, alpha: %.4f\n", pix.x, pix.y, uv.x, uv.y, alpha);
 
