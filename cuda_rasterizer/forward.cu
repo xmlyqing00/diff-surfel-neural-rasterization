@@ -460,7 +460,7 @@ renderCUDA(
 
 			bucket.add(contributor, depth, alpha, normal, color);
 			// if (pix.x == 250 && pix.y == 250) {
-			// 	printf("add j %d, alpha: %f, depth: %f, color: %f, %f, %f\n", bucket.num, alpha, depth, color[0], color[1], color[2]);
+				// printf("add j %d, alpha: %f, depth: %f, color: %f, %f, %f\n", bucket.num, alpha, depth, color[0], color[1], color[2]);
 			// }
 		}
 
@@ -468,7 +468,7 @@ renderCUDA(
 		// if (pix.x == 250 && pix.y == 250) {
 			// bucket.sort(true);
 		// } else {
-			// bucket.sort(false);
+			bucket.sort(true);
 		// }
 		
 
@@ -480,6 +480,7 @@ renderCUDA(
 			int local_contributor;
 			float alpha, depth, normal[3], color[3];
 			bucket.get(j, local_contributor, depth, alpha, normal, color);
+			// float local_contributor = contributor;
 			// if (pix.x == 250 && pix.y == 250) {
 			// 	printf("get i %d j %d, alpha: %f, depth: %f, color: %f, %f, %f\n", i, j, alpha, depth, color[0], color[1], color[2]);
 			// }

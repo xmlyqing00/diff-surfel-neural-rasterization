@@ -58,7 +58,7 @@ public:
         }
     }
 
-    __device__ void sort(bool verbose=false) {
+    __device__ void sort(bool ascending=true, bool verbose=false) {
         float scale = depth_max - depth_min;
         int bucket_size = BLOCK_SIZE - 1;
         for (int i = 0; i < num; i++) {
@@ -85,14 +85,25 @@ public:
                 }
             }
         }
-
-        for (int i = 0, j = 0; i < BLOCK_SIZE; i++) {
-            int idx = heads[i];
-            while (idx != -1) {
-                sorted[j++] = idx;
-                idx = nodes[idx].next_id;
+        
+        if (ascending) {
+            for (int i = 0, j = 0; i < BLOCK_SIZE; i++) {
+                int idx = heads[i];
+                while (idx != -1) {
+                    sorted[j++] = idx;
+                    idx = nodes[idx].next_id;
+                }
+            }
+        } else {
+            for (int i = BLOCK_SIZE - 1, j = 0; i >= 0; i--) {
+                int idx = heads[i];
+                while (idx != -1) {
+                    sorted[j++] = idx;
+                    idx = nodes[idx].next_id;
+                }
             }
         }
+        
         sorted_flag = true;
     }
 
@@ -109,7 +120,7 @@ public:
     }
 
     __device__ void get(int idx, int &contributor, float& depth, float& alpha, float normal[3], float color[3]) {
-        // idx = sorted[idx];
+        idx = sorted[idx];
         contributor = nodes[idx].contributor_id;
         depth = nodes[idx].depth;
         alpha = nodes[idx].alpha;

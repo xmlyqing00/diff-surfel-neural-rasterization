@@ -184,7 +184,9 @@ renderCUDA(
 	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
 	bool done = !inside;
-	int toDo = range.y - range.x;
+	// int toDo = range.y - range.x;
+	int toDo;
+	const int total_toDo = range.y - range.x;
 
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
@@ -202,7 +204,7 @@ renderCUDA(
 
 	// We start from the back. The ID of the last contributing
 	// Gaussian is known from each pixel from the forward.
-	uint32_t contributor = toDo;
+	uint32_t contributor = range.y - range.x;
 	const int last_contributor = inside ? n_contrib[pix_id] : 0;
 
 	float accum_rec[C] = { 0 };
@@ -255,15 +257,23 @@ renderCUDA(
 	const float ddely_dy = 0.5 * H;
 
 	// Traverse all Gaussians
-	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
+	for (int i = rounds - 1; i >= 0; i--)
 	{
+		if (i == rounds - 1) {
+			toDo = total_toDo % BLOCK_SIZE;
+		} else {
+			toDo = BLOCK_SIZE;
+		}
+		// if (pix.x == 250 && pix.y == 250) {
+			// printf("i: %d, toDo: %d\n", i, toDo);
+		// }
 		// Load auxiliary data into shared memory, start in the BACK
 		// and load them in revers order.
 		block.sync();
 		const int progress = i * BLOCK_SIZE + block.thread_rank();
-		if (range.x + progress < range.y)
+		if (progress < total_toDo)
 		{
-			const int coll_id = point_list[range.y - progress - 1];
+			const int coll_id = point_list[range.x + progress];
 			collected_id[block.thread_rank()] = coll_id;
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_normal_opacity[block.thread_rank()] = normal_opacity[coll_id];
@@ -275,19 +285,14 @@ renderCUDA(
 				// collected_depths[block.thread_rank()] = depths[coll_id];
 		}
 		block.sync();
+
 		Bucket bucket;
-		// if (pix.x == 250 && pix.y == 250) {
-		// 	printf("last_contributor: %d\n", last_contributor);
-		// }
 
 		// Iterate over Gaussians
-		for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++)
+		for (int j = toDo - 1; !done && j >= 0; j--)
 		{
 			// Keep track of current Gaussian ID. Skip, if this one
 			// is behind the last contributor for this pixel.
-			// if (pix.x == 250 && pix.y == 250) {
-			// printf("j %d, contributor: %d, last_contributor: %d\n", j, contributor, last_contributor);
-			// }
 			contributor--;
 			if (contributor >= last_contributor)
 				continue;
@@ -328,44 +333,37 @@ renderCUDA(
 			const float alpha = min(0.99f, opa * G);
 			if (alpha < 1.0f / 255.0f)
 				continue;
-
-			// gaussian colors
-			float gauss_colors[C];
-			for (int ch = 0; ch < C; ch++) gauss_colors[i] = collected_colors[ch * BLOCK_SIZE + j];
-
-			bucket.add(contributor, j, c_d, alpha, normal, gauss_colors);
-			// if (pix.x == 250 && pix.y == 250) {
-			// 	printf("add j %d, contributor: %d, c_d: %f, alpha: %f\n", j, contributor, c_d, alpha);
-			// }
-		// }
-
-		// bucket.sort(false);
-
-		// Iterate over the sorted Gaussians
-		// for (int j = 0; j < bucket.num; j++) {
 			
-		// 	int local_contributor, local_id; 
-		// 	float c_d, alpha, normal[3], gauss_colors[C];
-		// 	bucket.get(j, local_contributor, local_id, c_d, alpha, normal, gauss_colors);
-		// 	if (pix.x == 250 && pix.y == 250) {
-		// 		printf("j %d, local_contributor: %d, local_id: %d, c_d: %f, alpha: %f\n", j, local_contributor, local_id, c_d, alpha);
-		// 	}
-			
-			// const float2 xy = collected_xy[local_id];
-			// const float3 Tu = collected_Tu[local_id];
-			// const float3 Tv = collected_Tv[local_id];
-			// const float3 Tw = collected_Tw[local_id];
-			// float3 k = pix.x * Tw - Tu;
-			// float3 l = pix.y * Tw - Tv;
-			// float3 p = cross(k, l);
-			// float2 s = {p.x / p.z, p.y / p.z};
-			// float rho3d = (s.x * s.x + s.y * s.y); 
-			// float2 d = {xy.x - pixf.x, xy.y - pixf.y};
-			// float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
-			// float rho = min(rho3d, rho2d);
-			
-			// float opa = collected_normal_opacity[local_id].w;
-			// const float G = exp(-0.5f * rho);
+			float color[C];
+			for (int ch = 0; ch < C; ch++) {
+				color[ch] = collected_colors[ch * BLOCK_SIZE + j];
+			}
+			bucket.add(contributor, j, c_d, alpha, normal, color);
+		}
+
+		bucket.sort(false);
+
+		// Compute gradients for all Gaussians in the bucket
+		for (int bucket_j = 0; bucket_j < bucket.num; bucket_j++) {
+
+			int local_contributor, j;
+			float c_d, alpha, normal[3], color[C];
+			bucket.get(bucket_j, local_contributor, j, c_d, alpha, normal, color);
+
+			const float2 xy = collected_xy[j];
+			const float3 Tu = collected_Tu[j];
+			const float3 Tv = collected_Tv[j];
+			const float3 Tw = collected_Tw[j];
+			float3 k = pix.x * Tw - Tu;
+			float3 l = pix.y * Tw - Tv;
+			float3 p = cross(k, l);
+			float2 s = {p.x / p.z, p.y / p.z};
+			float rho3d = (s.x * s.x + s.y * s.y); 
+			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
+			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
+			float rho = min(rho3d, rho2d);
+			float opa = collected_normal_opacity[j].w;
+			const float G = exp(-0.5f * rho);
 
 			T = T / (1.f - alpha);
 			const float dchannel_dcolor = alpha * T;
@@ -377,7 +375,7 @@ renderCUDA(
 			const int global_id = collected_id[j];
 			for (int ch = 0; ch < C; ch++)
 			{
-				const float c = gauss_colors[ch];
+				const float c = collected_colors[ch * BLOCK_SIZE + j];
 				// Update last color (to be used in the next iteration)
 				accum_rec[ch] = last_alpha * last_color[ch] + (1.f - last_alpha) * accum_rec[ch];
 				last_color[ch] = c;
@@ -395,7 +393,7 @@ renderCUDA(
 #if RENDER_AXUTILITY
 			const float m_d = far_n / (far_n - near_n) * (1 - near_n / c_d);
 			const float dmd_dd = (far_n * near_n) / ((far_n - near_n) * c_d * c_d);
-			if (contributor == median_contributor-1) {
+			if (local_contributor == median_contributor-1) {
 				dL_dz += dL_dmedian_depth;
 				// dL_dweight += dL_dmax_dweight;
 			}
