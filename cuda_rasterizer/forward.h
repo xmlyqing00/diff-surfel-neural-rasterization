@@ -19,6 +19,7 @@
 #include <glm/glm.hpp>
 #include <torch/extension.h>
 #include "network.h"
+#include "bucket.h"
 
 
 namespace FORWARD

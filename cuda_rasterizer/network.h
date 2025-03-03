@@ -8,7 +8,7 @@
 
 #define C_LAYER_NUM 1
 #define C_IN_DIM 2
-#define C_HIDDEN_DIM 128
+#define C_HIDDEN_DIM 8
 #define C_OUT_DIM 3
 
 #define A_LAYER_NUM 1

@@ -322,6 +322,7 @@ renderCUDA(
 	float median_depth = {0};
 	// float median_weight = {0};
 	float median_contributor = {-1};
+	int pixel_depth_disorder = 0;
 
 #endif
 
@@ -335,6 +336,7 @@ renderCUDA(
 
 		// Collectively fetch per-Gaussian data from global to shared
 		// int thread_rank = block.thread_rank();
+
 		int progress = i * round_size + block.thread_rank();
 		if (range.x + progress < range.y)
 		{
@@ -345,28 +347,25 @@ renderCUDA(
 			collected_Tu[block.thread_rank()] = {transMats[9 * coll_id+0], transMats[9 * coll_id+1], transMats[9 * coll_id+2]};
 			collected_Tv[block.thread_rank()] = {transMats[9 * coll_id+3], transMats[9 * coll_id+4], transMats[9 * coll_id+5]};
 			collected_Tw[block.thread_rank()] = {transMats[9 * coll_id+6], transMats[9 * coll_id+7], transMats[9 * coll_id+8]};
-			// if (block.thread_rank() >= round_size) {
-			// 	printf("exceeding !!! block_thread_rank: %d, round_size %d\n", block.thread_rank(), round_size);
-			// }
-			// collected_net[block.thread_rank()] = Network();
-			// collected_net[block.thread_rank()] = GaborInterVars();
-			// printf("initialized. %d\n", sizeof(Network));
-			// printf("collected_net[block.thread_rank()].filters %p, linears %p\n", collected_net[block.thread_rank()].gabor_layers, collected_net[block.thread_rank()].linear_layers);
-			// params->get_params(coll_id, collected_net[block.thread_rank()], false);
 		}
 		block.sync();
+		
+		Bucket bucket;
+		// Count the depth along the shooting ray
+		float pixel_depth[BLOCK_SIZE] = {0};
 
 		// Iterate over current batch
 		for (int j = 0; !done && j < min(round_size, toDo); j++)
 		{
-			// Keep track of current position in range
-			contributor++;
 			// printf("size of network %d\n", sizeof(Network));
 
 			// printf("try to access net in forward.h renderCuda.\n");
 			// printf("net: %p\n", net);
 			// printf("l1_lw: %p\n", net->l1_lw);
 			// printf("l1_lw[%d]: %f\n", 0, net->l1_lw[0]);
+			
+			// Keep track of current position in range
+			contributor++;
 
 			// Fisrt compute two homogeneous planes, See Eq. (8)
 			const float2 xy = collected_xy[j];
@@ -419,14 +418,6 @@ renderCUDA(
 				// params->get_params(collected_id[j], net, false);
 				const float uv_[] = {uv.x / 3, uv.y / 3};
 				
-				// if (pix.x >= 200 && pix.x <= 300 && pix.x % 20 == 0 && pix.y == 250) {
-				// 	net.forward(uv_, net_res, true);
-				// 	// printf("pix: %d, %d, uv: %f, %f, net_res: %.4f %.4f %.4f\n", pix.x, pix.y, uv.x, uv.y, net_res[0], net_res[1], net_res[2]);
-				// } else {
-				// 	net.forward(uv_, net_res, false);
-				// }
-				// collected_net[j].forward(uv_, net_res, false);
-				// collected_net[j].forward(uv_, net_res, false);
 				color_net.forward(uv_, color_net_res, false);
 				// alpha_net.forward(uv_, alpha_net_res, false);
 				// alpha = alpha_net_res[0];
@@ -434,8 +425,6 @@ renderCUDA(
 				if (power > 0.0f)
 					continue;
 				alpha = opa * exp(power);
-
-				// printf("pix: %d, %d, uv: %f, %f, alpha: %.4f\n", pix.x, pix.y, uv.x, uv.y, alpha);
 
 			} else {
 
@@ -460,6 +449,41 @@ renderCUDA(
 				continue;
 			}
 
+			// Store the data in the bucket for sorting
+			float color[COLOR_CHANNELS];
+			for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
+				color[ch] = features[collected_id[j] * COLOR_CHANNELS + ch];
+			}
+
+			// Keep track of last range entry to update this pixel.
+			last_contributor = contributor;
+
+			bucket.add(contributor, depth, alpha, normal, color);
+			// if (pix.x == 250 && pix.y == 250) {
+			// 	printf("add j %d, alpha: %f, depth: %f, color: %f, %f, %f\n", bucket.num, alpha, depth, color[0], color[1], color[2]);
+			// }
+		}
+
+		// Sort the bucket
+		// if (pix.x == 250 && pix.y == 250) {
+			// bucket.sort(true);
+		// } else {
+			// bucket.sort(false);
+		// }
+		
+
+
+		// Iterate over the sorted bucket
+		for (int j = 0; j < bucket.num; j++) {
+
+			// Fetch data from the bucket
+			int local_contributor;
+			float alpha, depth, normal[3], color[3];
+			bucket.get(j, local_contributor, depth, alpha, normal, color);
+			// if (pix.x == 250 && pix.y == 250) {
+			// 	printf("get i %d j %d, alpha: %f, depth: %f, color: %f, %f, %f\n", i, j, alpha, depth, color[0], color[1], color[2]);
+			// }
+
 			float w = alpha * T;
 #if RENDER_AXUTILITY
 			// Render depth distortion map
@@ -470,36 +494,27 @@ renderCUDA(
 			D  += depth * w;
 			M1 += m * w;
 			M2 += m * m * w;
+			pixel_depth[j] = depth;
 
 			if (T > 0.5) {
 				median_depth = depth;
 				// median_weight = w;
-				median_contributor = contributor;
+				median_contributor = local_contributor;
 			}
 			// Render normal map
 			for (int ch=0; ch<3; ch++) N[ch] += normal[ch] * w;
 #endif
 
 			// Eq. (3) from 3D Gaussian splatting paper.
-			for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
-
-				C[ch] += features[collected_id[j] * COLOR_CHANNELS + ch] * w;
-				if (neural_offset) {
-					C[ch] += color_net_res[ch] * w;
-				}
-
-				if (C[ch] > 1000) {
-					printf("rho3d %f rho2d %f, uv %f %f, s %f %f\n", rho3d, rho2d, uv.x, uv.y, s.x, s.y);
-					printf("uv %.3f %.3f, pix %d %d, alpha %.3f, w %.3f, color %.3f\n", uv.x, uv.y, pix.x, pix.y, alpha, w, C[ch]);
-				}
-			}
+			for (int ch = 0; ch < COLOR_CHANNELS; ch++) C[ch] += color[ch] * w;
 			
-			T = test_T;
-
-			// Keep track of last range entry to update this
-			// pixel.
-			last_contributor = contributor;
+			T = T * (1 - alpha);
 		}
+
+		for (int j = 1; j < bucket.num; j++) {
+			if (pixel_depth[j] < pixel_depth[j-1]) pixel_depth_disorder++;
+		}
+
 	}
 
 	// All threads that treat valid pixel write out their final
@@ -521,8 +536,11 @@ renderCUDA(
 		out_others[pix_id + MIDDEPTH_OFFSET * H * W] = median_depth;
 		out_others[pix_id + DISTORTION_OFFSET * H * W] = distortion;
 		// out_others[pix_id + MEDIAN_WEIGHT_OFFSET * H * W] = median_weight;
+		out_others[pix_id + DISORDER_OFFSET * H * W] = float(pixel_depth_disorder);
+		
 #endif
 	}
+
 }
 
 void FORWARD::render(

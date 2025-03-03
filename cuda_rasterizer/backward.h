@@ -18,6 +18,7 @@
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
 #include "network.h"
+#include "bucket.h"
 
 
 namespace BACKWARD
