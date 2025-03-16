@@ -294,6 +294,14 @@ renderCUDA(
 	const int rounds = ((range.y - range.x + round_size - 1) / round_size);
 	int toDo = range.y - range.x;
 
+	// 378 %% 571
+	// const bool print_debug = (pix.x == 208 && pix.y == 112) ? true: false;
+	// const bool print_debug = (pix.x == 494 && (pix.y == 576)) ? true: false;
+	const bool print_debug = false;
+	// bool print_debug = true;
+	// if (pix.x == 250)
+	// printf("here x %d, y %d, print_debug %d\n", pix.x, pix.y, print_debug);
+
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ int collected_id[round_size];
 	__shared__ float2 collected_xy[round_size];
@@ -325,10 +333,21 @@ renderCUDA(
 	int pixel_depth_disorder = 0;
 
 #endif
+	Bucket<ForwardNode> bucket;
 
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= round_size)
 	{
+
+		if (i >= MAX_ROUNDS) {
+			if (print_debug)
+				printf("fw, pix (%d,%d) round %d, toDo %d\n", pix.x, pix.y, i, toDo);
+			break;
+		}
+		// } else {
+		// 	if (print_debug)
+		// 	printf("fw, pix (%d,%d) round %d, toDo %d\n", pix.x, pix.y, i, toDo);
+		// }
 		// End if entire block votes that it is done rasterizing
 		int num_done = __syncthreads_count(done);
 		if (num_done == round_size)
@@ -349,8 +368,9 @@ renderCUDA(
 			collected_Tw[block.thread_rank()] = {transMats[9 * coll_id+6], transMats[9 * coll_id+7], transMats[9 * coll_id+8]};
 		}
 		block.sync();
+
+		if (print_debug) printf("forward round %d, toDo %d, T %f\n", i, toDo, T);
 		
-		Bucket bucket;
 		// Count the depth along the shooting ray
 		float pixel_depth[BLOCK_SIZE] = {0};
 
@@ -400,7 +420,7 @@ renderCUDA(
 			if (depth < near_n) continue;
 
 			float4 nor_o = collected_normal_opacity[j];
-			float normal[3] = {nor_o.x, nor_o.y, nor_o.z};
+			// float normal[3] = {nor_o.x, nor_o.y, nor_o.z};
 			float opa = nor_o.w;
 			float alpha;
 
@@ -450,83 +470,156 @@ renderCUDA(
 			}
 
 			// Store the data in the bucket for sorting
-			float color[COLOR_CHANNELS];
-			for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
-				color[ch] = features[collected_id[j] * COLOR_CHANNELS + ch];
-			}
+			// // float color[COLOR_CHANNELS];
+			// for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
+			// 	color[ch] = features[collected_id[j] * COLOR_CHANNELS + ch];
+			// }
 
 			// Keep track of last range entry to update this pixel.
-			last_contributor = contributor;
-
-			bucket.add(contributor, depth, alpha, normal, color);
-			// if (pix.x == 250 && pix.y == 250) {
-				// printf("add j %d, alpha: %f, depth: %f, color: %f, %f, %f\n", bucket.num, alpha, depth, color[0], color[1], color[2]);
-			// }
-		}
-
-		// Sort the bucket
-		// if (pix.x == 250 && pix.y == 250) {
-			// bucket.sort(true);
-		// } else {
-			bucket.sort(true);
-		// }
-		
-
-
-		// Iterate over the sorted bucket
-		for (int j = 0; j < bucket.num; j++) {
-
-			// Fetch data from the bucket
-			int local_contributor;
-			float alpha, depth, normal[3], color[3];
-			bucket.get(j, local_contributor, depth, alpha, normal, color);
-			// float local_contributor = contributor;
-			// if (pix.x == 250 && pix.y == 250) {
-			// 	printf("get i %d j %d, alpha: %f, depth: %f, color: %f, %f, %f\n", i, j, alpha, depth, color[0], color[1], color[2]);
-			// }
-
-			float w = alpha * T;
-#if RENDER_AXUTILITY
-			// Render depth distortion map
-			// Efficient implementation of distortion loss, see 2DGS' paper appendix.
-			float A = 1-T;
-			float m = far_n / (far_n - near_n) * (1 - near_n / depth);
-			distortion += (m * m * A + M2 - 2 * m * M1) * w;
-			D  += depth * w;
-			M1 += m * w;
-			M2 += m * m * w;
-			pixel_depth[j] = depth;
-
-			if (T > 0.5) {
-				median_depth = depth;
-				// median_weight = w;
-				median_contributor = local_contributor;
+			// last_contributor = contributor;
+			last_contributor = i * round_size + j;
+			
+			ForwardNode node(j, depth, alpha);
+			bucket.add(node);
+			if (print_debug) {
+				printf("fw add j %d, bucket_id %d\n", j, bucket.num-1);
+				node.print();
 			}
-			// Render normal map
-			for (int ch=0; ch<3; ch++) N[ch] += normal[ch] * w;
+			// 	printf("fw add round %d, j %d, bucket_id %d alpha: %f, depth: %f, normal %f, color: %f\n", i, j, bucket.num-1, alpha, depth, normal[0], color[0]);
+			// }
+			
+			if (!bucket.full()) continue;
+
+			// Sort the bucket
+			bucket.sort(true);
+
+			// Iterate over the sorted bucket
+			for (int k = 0; k < bucket.num; k++) {
+
+				// Fetch data from the bucket
+				ForwardNode node = bucket.get(k);
+				if (print_debug) {
+					node.print();
+				}
+
+				float w = node.alpha * T;
+#if RENDER_AXUTILITY
+				// Render depth distortion map
+				// Efficient implementation of distortion loss, see 2DGS' paper appendix.
+				float A = 1-T;
+				float m = far_n / (far_n - near_n) * (1 - near_n / node.depth);
+				distortion += (m * m * A + M2 - 2 * m * M1) * w;
+				D  += node.depth * w;
+				M1 += m * w;
+				M2 += m * m * w;
+				// pixel_depth[j] = depth;
+
+				if (T > 0.5) {
+					median_depth = node.depth;
+					// median_weight = w;
+					median_contributor = i * round_size + node.local_j;
+				}
+				// Render normal map
+				// for (int ch=0; ch<3; ch++) N[ch] += node.normal[ch] * w;
+				N[0] += collected_normal_opacity[node.local_j].x * w;
+				N[1] += collected_normal_opacity[node.local_j].y * w;
+				N[2] += collected_normal_opacity[node.local_j].z * w;
 #endif
 
-			// Eq. (3) from 3D Gaussian splatting paper.
-			for (int ch = 0; ch < COLOR_CHANNELS; ch++) C[ch] += color[ch] * w;
+				// Eq. (3) from 3D Gaussian splatting paper.
+				int gauss_id = collected_id[node.local_j];
+				for (int ch = 0; ch < COLOR_CHANNELS; ch++) C[ch] += features[gauss_id * COLOR_CHANNELS + ch] * w;
+				
+				T = T * (1 - node.alpha);
+			}
+
+			bucket.init();
+			if (print_debug) {
+				printf("bucket init\n");
+			}
 			
-			T = T * (1 - alpha);
+
 		}
 
-		for (int j = 1; j < bucket.num; j++) {
-			if (pixel_depth[j] < pixel_depth[j-1]) pixel_depth_disorder++;
+		// Process the last batch in bucket
+		if (bucket.num > 0) {
+			bucket.sort(true);
+			// Iterate over the sorted bucket
+			for (int k = 0; k < bucket.num; k++) {
+
+				// Fetch data from the bucket
+				ForwardNode node = bucket.get(k);
+				if (print_debug) {
+					printf("get k %d, bucket_id %d\n", k, bucket.num-1);
+					node.print();
+				}
+
+				float w = node.alpha * T;
+	#if RENDER_AXUTILITY
+				// Render depth distortion map
+				// Efficient implementation of distortion loss, see 2DGS' paper appendix.
+				float A = 1-T;
+				float m = far_n / (far_n - near_n) * (1 - near_n / node.depth);
+				distortion += (m * m * A + M2 - 2 * m * M1) * w;
+				D  += node.depth * w;
+				M1 += m * w;
+				M2 += m * m * w;
+				// pixel_depth[j] = depth;
+
+				if (T > 0.5) {
+					median_depth = node.depth;
+					// median_weight = w;
+					median_contributor = i * round_size + node.local_j;
+				}
+				// Render normal map
+				N[0] += collected_normal_opacity[node.local_j].x * w;
+				N[1] += collected_normal_opacity[node.local_j].y * w;
+				N[2] += collected_normal_opacity[node.local_j].z * w;
+	#endif
+
+				// Eq. (3) from 3D Gaussian splatting paper.
+				int gauss_id = collected_id[node.local_j];
+				for (int ch = 0; ch < COLOR_CHANNELS; ch++) C[ch] += features[gauss_id * COLOR_CHANNELS + ch] * w;
+				
+				T = T * (1 - node.alpha);
+			}
 		}
+
+		if (inside && i < MAX_ROUNDS) {
+			// last contributor number in the bucket
+			n_contrib[pix_id + (2 + i) * H * W] = bucket.num > 0? bucket.num: BUCKET_SIZE;
+			if (print_debug) {
+				printf("assign n_contrib %d\n", n_contrib[pix_id + (2 + i) * H * W]);
+			}
+		}
+
+		bucket.init();
+		if (print_debug) {
+			printf("bucket init. n_contrib %d\n", n_contrib[pix_id + (2 + i) * H * W]);
+		}
+
+		// for (int j = 1; j < bucket.num; j++) {
+		// 	if (pixel_depth[j] < pixel_depth[j-1]) pixel_depth_disorder++;
+		// }
 
 	}
+
+	
 
 	// All threads that treat valid pixel write out their final
 	// rendering data to the frame and auxiliary buffers.
 	if (inside)
 	{
+		// if (pix.x == 250 && pix.y == 250) {
+		// 	printf("fw, last contributor %d\n", last_contributor);
+		// }
 		final_T[pix_id] = T;
 		n_contrib[pix_id] = last_contributor;
 		for (int ch = 0; ch < COLOR_CHANNELS; ch++)
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
-
+		// if (print_debug) {
+			// printf("fw, pix_id %d, bucket_num %d\n", pix_id, bucket.num);
+		// }
 #if RENDER_AXUTILITY
 		n_contrib[pix_id + H * W] = median_contributor;
 		final_T[pix_id + H * W] = M1;
