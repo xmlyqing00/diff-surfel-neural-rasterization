@@ -181,7 +181,8 @@ renderCUDA(
 	const bool inside = pix.x < W && pix.y < H;
 	const uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
 	const int round_size = BLOCK_SIZE;
-	const int rounds = min(MAX_ROUNDS, ((range.y - range.x + round_size - 1) / round_size));
+	// const int rounds = min(MAX_ROUNDS, ((range.y - range.x + round_size - 1) / round_size));
+	const int rounds = (range.y - range.x + round_size - 1) / round_size;
 
 	bool done = !inside;
 	const int total_toDo = range.y - range.x;
@@ -274,8 +275,11 @@ renderCUDA(
 
 	// Traverse all Gaussians
 	for (int i = rounds - 1; i >= 0; i--)  // not done here!! need to load data first!!
-	{
-		assert(i < MAX_ROUNDS);
+	{	
+		bool use_bucket_sort = true;
+		if (i >= MAX_ROUNDS) {
+			use_bucket_sort = false;
+		}
 		// if (pix.x == 250 && pix.y == 250) {
 			// printf("i: %d, toDo: %d\n", i, toDo);
 		// }
@@ -301,7 +305,10 @@ renderCUDA(
 		}
 		block.sync();
 
-		int forward_bucket_num = n_contrib[pix_id + (i + 2) * H * W];
+		int forward_bucket_num = 0;
+		if (use_bucket_sort) {
+			forward_bucket_num = n_contrib[pix_id + (i + 2) * H * W];
+		}
 		if (print_debug) {
 			printf("bw pix_id: %d, round_i: %d, forward_bucket_num: %d, todo %d\n", pix_id, i, forward_bucket_num, toDo);
 		}
@@ -376,8 +383,10 @@ renderCUDA(
 			// }
 			
 			if (bucket.num < forward_bucket_num) continue;
-
-			bucket.sort(false);
+			
+			if (use_bucket_sort) {
+				bucket.sort(false);
+			}
 
 			// Compute gradients for all Gaussians in the bucket
 			for (int bucket_idx = 0; bucket_idx < bucket.num; bucket_idx++) {
@@ -566,7 +575,12 @@ renderCUDA(
 			if (print_debug) {
 				printf("bw init pix.x, pix.y %d %d, bucket_num, old: %d, new %d\n", pix.x, pix.y, forward_bucket_num, BUCKET_SIZE);
 			}
-			forward_bucket_num = BUCKET_SIZE;
+
+			if (use_bucket_sort) {
+				forward_bucket_num = BUCKET_SIZE;
+			} else {
+				forward_bucket_num = 0;
+			}
 			// break;
 		}
 

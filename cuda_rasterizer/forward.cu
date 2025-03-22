@@ -336,13 +336,14 @@ renderCUDA(
 	Bucket<ForwardNode> bucket;
 
 	// Iterate over batches until all done or range is complete
-	for (int i = 0; i < rounds; i++, toDo -= round_size)
-	{
+	for (int i = 0; i < rounds; i++, toDo -= round_size) {
 
+		bool use_bucket_sort = true;
 		if (i >= MAX_ROUNDS) {
-			if (print_debug)
-				printf("fw, pix (%d,%d) round %d, toDo %d\n", pix.x, pix.y, i, toDo);
-			break;
+			// if (print_debug)
+				// printf("fw, pix (%d,%d) round %d, toDo %d\n", pix.x, pix.y, i, toDo);
+			// break;
+			use_bucket_sort = false;
 		}
 		// } else {
 		// 	if (print_debug)
@@ -375,8 +376,7 @@ renderCUDA(
 		float pixel_depth[BLOCK_SIZE] = {0};
 
 		// Iterate over current batch
-		for (int j = 0; !done && j < min(round_size, toDo); j++)
-		{
+		for (int j = 0; !done && j < min(round_size, toDo); j++) {
 			// printf("size of network %d\n", sizeof(Network));
 
 			// printf("try to access net in forward.h renderCuda.\n");
@@ -489,9 +489,11 @@ renderCUDA(
 			// }
 			
 			if (!bucket.full()) continue;
-
-			// Sort the bucket
-			bucket.sort(true);
+			
+			if (use_bucket_sort) {
+				// Sort the bucket
+				bucket.sort(true);
+			}
 
 			// Iterate over the sorted bucket
 			for (int k = 0; k < bucket.num; k++) {
@@ -543,7 +545,12 @@ renderCUDA(
 
 		// Process the last batch in bucket
 		if (bucket.num > 0) {
-			bucket.sort(true);
+
+			if (use_bucket_sort) {
+				// Sort the bucket
+				bucket.sort(true);
+			}
+
 			// Iterate over the sorted bucket
 			for (int k = 0; k < bucket.num; k++) {
 
@@ -585,7 +592,7 @@ renderCUDA(
 			}
 		}
 
-		if (inside && i < MAX_ROUNDS) {
+		if (inside && use_bucket_sort) {
 			// last contributor number in the bucket
 			n_contrib[pix_id + (2 + i) * H * W] = bucket.num > 0? bucket.num: BUCKET_SIZE;
 			if (print_debug) {
