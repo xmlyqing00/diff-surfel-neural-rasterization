@@ -271,7 +271,6 @@ renderCUDA(
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
-	float* __restrict__ out_others,
 	bool neural_offset)
 {
 	// Identify current tile and associated min/max pixel range.
@@ -294,14 +293,6 @@ renderCUDA(
 	const int rounds = ((range.y - range.x + round_size - 1) / round_size);
 	int toDo = range.y - range.x;
 
-	// 378 %% 571
-	// const bool print_debug = (pix.x == 208 && pix.y == 112) ? true: false;
-	// const bool print_debug = (pix.x == 494 && (pix.y == 576)) ? true: false;
-	const bool print_debug = false;
-	// bool print_debug = true;
-	// if (pix.x == 250)
-	// printf("here x %d, y %d, print_debug %d\n", pix.x, pix.y, print_debug);
-
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ int collected_id[round_size];
 	__shared__ float2 collected_xy[round_size];
@@ -313,7 +304,6 @@ renderCUDA(
 
 	// Initialize helper variables
 	float T = 1.0f;
-	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
 	float C[COLOR_CHANNELS] = { 0 };
 	float color_net_res[C_OUT_DIM] = {0};
@@ -334,21 +324,60 @@ renderCUDA(
 
 #endif
 	Bucket<ForwardNode> bucket;
+	int i;
+	auto blend = [&]() {
+
+		// bucket.sort(true);
+
+		// Iterate over the sorted bucket
+		for (int k = 0; k < bucket.num; k++) {
+
+			// Fetch data from the bucket
+			ForwardNode node = bucket.get(k);
+
+			float test_T = T * (1 - node.alpha);
+			if (test_T < 0.0001f) 
+			{
+				done = true;
+				return;
+			}
+
+			float w = node.alpha * T;
+#if RENDER_AXUTILITY
+			// Render depth distortion map
+			// Efficient implementation of distortion loss, see 2DGS' paper appendix.
+			float A = 1-T;
+			float m = far_n / (far_n - near_n) * (1 - near_n / node.depth);
+			distortion += (m * m * A + M2 - 2 * m * M1) * w;
+			D  += node.depth * w;
+			M1 += m * w;
+			M2 += m * m * w;
+			// pixel_depth[j] = depth;
+
+			if (T > 0.5) {
+				median_depth = node.depth;
+				// median_weight = w;
+				median_contributor = i * round_size + node.local_j;
+			}
+			// Render normal map
+			// for (int ch=0; ch<3; ch++) N[ch] += node.normal[ch] * w;
+			N[0] += collected_normal_opacity[node.local_j].x * w;
+			N[1] += collected_normal_opacity[node.local_j].y * w;
+			N[2] += collected_normal_opacity[node.local_j].z * w;
+
+#endif
+
+			// Eq. (3) from 3D Gaussian splatting paper.
+			int gauss_id = collected_id[node.local_j];
+			for (int ch = 0; ch < COLOR_CHANNELS; ch++) C[ch] += features[gauss_id * COLOR_CHANNELS + ch] * w;
+			
+			T = test_T;
+		}
+	};
 
 	// Iterate over batches until all done or range is complete
-	for (int i = 0; i < rounds; i++, toDo -= round_size) {
+	for (i = 0; i < rounds; i++, toDo -= round_size) {
 
-		bool use_bucket_sort = true;
-		if (i >= MAX_ROUNDS) {
-			// if (print_debug)
-				// printf("fw, pix (%d,%d) round %d, toDo %d\n", pix.x, pix.y, i, toDo);
-			// break;
-			use_bucket_sort = false;
-		}
-		// } else {
-		// 	if (print_debug)
-		// 	printf("fw, pix (%d,%d) round %d, toDo %d\n", pix.x, pix.y, i, toDo);
-		// }
 		// End if entire block votes that it is done rasterizing
 		int num_done = __syncthreads_count(done);
 		if (num_done == round_size)
@@ -370,23 +399,12 @@ renderCUDA(
 		}
 		block.sync();
 
-		if (print_debug) printf("forward round %d, toDo %d, T %f\n", i, toDo, T);
-		
 		// Count the depth along the shooting ray
 		float pixel_depth[BLOCK_SIZE] = {0};
 
 		// Iterate over current batch
 		for (int j = 0; !done && j < min(round_size, toDo); j++) {
-			// printf("size of network %d\n", sizeof(Network));
-
-			// printf("try to access net in forward.h renderCuda.\n");
-			// printf("net: %p\n", net);
-			// printf("l1_lw: %p\n", net->l1_lw);
-			// printf("l1_lw[%d]: %f\n", 0, net->l1_lw[0]);
 			
-			// Keep track of current position in range
-			contributor++;
-
 			// Fisrt compute two homogeneous planes, See Eq. (8)
 			const float2 xy = collected_xy[j];
 			const float3 Tu = collected_Tu[j];
@@ -461,154 +479,22 @@ renderCUDA(
 			
 			alpha = min(0.99f, alpha);
 			if (alpha < threshold_visible) continue;
-
-			float test_T = T * (1 - alpha);
-			if (test_T < 0.0001f)
-			{
-				done = true;
-				continue;
-			}
-
-			// Store the data in the bucket for sorting
-			// // float color[COLOR_CHANNELS];
-			// for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
-			// 	color[ch] = features[collected_id[j] * COLOR_CHANNELS + ch];
-			// }
-
-			// Keep track of last range entry to update this pixel.
-			// last_contributor = contributor;
-			last_contributor = i * round_size + j;
 			
 			ForwardNode node(j, depth, alpha);
 			bucket.add(node);
-			if (print_debug) {
-				printf("fw add j %d, bucket_id %d\n", j, bucket.num-1);
-				node.print();
-			}
-			// 	printf("fw add round %d, j %d, bucket_id %d alpha: %f, depth: %f, normal %f, color: %f\n", i, j, bucket.num-1, alpha, depth, normal[0], color[0]);
+			
+			// if (bucket.full()) {
+				blend();
+				bucket.init();
 			// }
 			
-			if (!bucket.full()) continue;
-			
-			if (use_bucket_sort) {
-				// Sort the bucket
-				bucket.sort(true);
-			}
-
-			// Iterate over the sorted bucket
-			for (int k = 0; k < bucket.num; k++) {
-
-				// Fetch data from the bucket
-				ForwardNode node = bucket.get(k);
-				if (print_debug) {
-					node.print();
-				}
-
-				float w = node.alpha * T;
-#if RENDER_AXUTILITY
-				// Render depth distortion map
-				// Efficient implementation of distortion loss, see 2DGS' paper appendix.
-				float A = 1-T;
-				float m = far_n / (far_n - near_n) * (1 - near_n / node.depth);
-				distortion += (m * m * A + M2 - 2 * m * M1) * w;
-				D  += node.depth * w;
-				M1 += m * w;
-				M2 += m * m * w;
-				// pixel_depth[j] = depth;
-
-				if (T > 0.5) {
-					median_depth = node.depth;
-					// median_weight = w;
-					median_contributor = i * round_size + node.local_j;
-				}
-				// Render normal map
-				// for (int ch=0; ch<3; ch++) N[ch] += node.normal[ch] * w;
-				N[0] += collected_normal_opacity[node.local_j].x * w;
-				N[1] += collected_normal_opacity[node.local_j].y * w;
-				N[2] += collected_normal_opacity[node.local_j].z * w;
-#endif
-
-				// Eq. (3) from 3D Gaussian splatting paper.
-				int gauss_id = collected_id[node.local_j];
-				for (int ch = 0; ch < COLOR_CHANNELS; ch++) C[ch] += features[gauss_id * COLOR_CHANNELS + ch] * w;
-				
-				T = T * (1 - node.alpha);
-			}
-
-			bucket.init();
-			if (print_debug) {
-				printf("bucket init\n");
-			}
-			
-
 		}
 
 		// Process the last batch in bucket
-		if (bucket.num > 0) {
-
-			if (use_bucket_sort) {
-				// Sort the bucket
-				bucket.sort(true);
-			}
-
-			// Iterate over the sorted bucket
-			for (int k = 0; k < bucket.num; k++) {
-
-				// Fetch data from the bucket
-				ForwardNode node = bucket.get(k);
-				if (print_debug) {
-					printf("get k %d, bucket_id %d\n", k, bucket.num-1);
-					node.print();
-				}
-
-				float w = node.alpha * T;
-	#if RENDER_AXUTILITY
-				// Render depth distortion map
-				// Efficient implementation of distortion loss, see 2DGS' paper appendix.
-				float A = 1-T;
-				float m = far_n / (far_n - near_n) * (1 - near_n / node.depth);
-				distortion += (m * m * A + M2 - 2 * m * M1) * w;
-				D  += node.depth * w;
-				M1 += m * w;
-				M2 += m * m * w;
-				// pixel_depth[j] = depth;
-
-				if (T > 0.5) {
-					median_depth = node.depth;
-					// median_weight = w;
-					median_contributor = i * round_size + node.local_j;
-				}
-				// Render normal map
-				N[0] += collected_normal_opacity[node.local_j].x * w;
-				N[1] += collected_normal_opacity[node.local_j].y * w;
-				N[2] += collected_normal_opacity[node.local_j].z * w;
-	#endif
-
-				// Eq. (3) from 3D Gaussian splatting paper.
-				int gauss_id = collected_id[node.local_j];
-				for (int ch = 0; ch < COLOR_CHANNELS; ch++) C[ch] += features[gauss_id * COLOR_CHANNELS + ch] * w;
-				
-				T = T * (1 - node.alpha);
-			}
-		}
-
-		if (inside && use_bucket_sort) {
-			// last contributor number in the bucket
-			n_contrib[pix_id + (2 + i) * H * W] = bucket.num > 0? bucket.num: BUCKET_SIZE;
-			if (print_debug) {
-				printf("assign n_contrib %d\n", n_contrib[pix_id + (2 + i) * H * W]);
-			}
-		}
-
-		bucket.init();
-		if (print_debug) {
-			printf("bucket init. n_contrib %d\n", n_contrib[pix_id + (2 + i) * H * W]);
-		}
-
-		// for (int j = 1; j < bucket.num; j++) {
-		// 	if (pixel_depth[j] < pixel_depth[j-1]) pixel_depth_disorder++;
+		// if (!done) {
+			blend();
+			bucket.init();
 		// }
-
 	}
 
 	
@@ -617,27 +503,22 @@ renderCUDA(
 	// rendering data to the frame and auxiliary buffers.
 	if (inside)
 	{
-		// if (pix.x == 250 && pix.y == 250) {
-		// 	printf("fw, last contributor %d\n", last_contributor);
-		// }
 		final_T[pix_id] = T;
-		n_contrib[pix_id] = last_contributor;
-		for (int ch = 0; ch < COLOR_CHANNELS; ch++)
+		for (int ch = 0; ch < COLOR_CHANNELS; ch++) {
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
-		// if (print_debug) {
-			// printf("fw, pix_id %d, bucket_num %d\n", pix_id, bucket.num);
-		// }
+			out_color[(NORMAL_OFFSET+ch) * H * W + pix_id] = N[ch];
+		}
+
 #if RENDER_AXUTILITY
-		n_contrib[pix_id + H * W] = median_contributor;
+		n_contrib[pix_id] = median_contributor;
 		final_T[pix_id + H * W] = M1;
 		final_T[pix_id + 2 * H * W] = M2;
-		out_others[pix_id + DEPTH_OFFSET * H * W] = D;
-		out_others[pix_id + ALPHA_OFFSET * H * W] = 1 - T;
-		for (int ch=0; ch<3; ch++) out_others[pix_id + (NORMAL_OFFSET+ch) * H * W] = N[ch];
-		out_others[pix_id + MIDDEPTH_OFFSET * H * W] = median_depth;
-		out_others[pix_id + DISTORTION_OFFSET * H * W] = distortion;
-		// out_others[pix_id + MEDIAN_WEIGHT_OFFSET * H * W] = median_weight;
-		out_others[pix_id + DISORDER_OFFSET * H * W] = float(pixel_depth_disorder);
+		out_color[pix_id + DEPTH_OFFSET * H * W] = D;
+		out_color[pix_id + ALPHA_OFFSET * H * W] = 1 - T;
+		out_color[pix_id + MIDDEPTH_OFFSET * H * W] = median_depth;
+		out_color[pix_id + DISTORTION_OFFSET * H * W] = distortion;
+		// out_color[pix_id + MEDIAN_WEIGHT_OFFSET * H * W] = median_weight;
+		out_color[pix_id + DISORDER_OFFSET * H * W] = float(pixel_depth_disorder);
 		
 #endif
 	}
@@ -661,11 +542,10 @@ void FORWARD::render(
 	uint32_t* n_contrib,
 	const float* bg_color,
 	float* out_color,
-	float* out_others,
 	bool neural_offset)
 {
-	cudaDeviceProp prop;
-	cudaGetDeviceProperties(&prop, 0); // Query device 0
+	// cudaDeviceProp prop;
+	// cudaGetDeviceProperties(&prop, 0); // Query device 0
 	// printf("Shared memory per SM: %d KB\n", prop.sharedMemPerMultiprocessor / 1024);
 	// printf("Shared memory per block: %d KB\n", prop.sharedMemPerBlock / 1024);
 
@@ -685,7 +565,6 @@ void FORWARD::render(
 		n_contrib,
 		bg_color,
 		out_color,
-		out_others,
 		neural_offset);
 }
 

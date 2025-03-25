@@ -63,13 +63,12 @@ namespace FORWARD
 		const float* transMats,
 		const float* depths,
 		const float4* normal_opacity,
-		 float* color_nets,
-		 float* alpha_nets,
+		float* color_nets,
+		float* alpha_nets,
 		float* final_T,
 		uint32_t* n_contrib,
 		const float* bg_color,
 		float* out_color,
-		float* out_others,
 		bool neural_offset);
 }
 

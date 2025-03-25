@@ -137,6 +137,7 @@ public:
     }
 
     __device__ void add(const T &node) {
+        // assert(num < BUCKET_SIZE);
         nodes[num++] = node;
         depth_min = fmin(depth_min, node.depth);
         depth_max = fmax(depth_max, node.depth);

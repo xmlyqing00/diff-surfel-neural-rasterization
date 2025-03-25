@@ -22,13 +22,13 @@
 
 #define TIGHTBBOX 0
 #define RENDER_AXUTILITY 1
-#define DEPTH_OFFSET 0
-#define ALPHA_OFFSET 1
-#define NORMAL_OFFSET 2 
-#define MIDDEPTH_OFFSET 5
-#define DISTORTION_OFFSET 6
-// #define MEDIAN_WEIGHT_OFFSET 7
-#define DISORDER_OFFSET 7
+#define DEPTH_OFFSET 3
+#define ALPHA_OFFSET 4
+#define NORMAL_OFFSET 5
+#define MIDDEPTH_OFFSET 8
+#define DISTORTION_OFFSET 9
+// #define MEDIAN_WEIGHT_OFFSET 10
+#define DISORDER_OFFSET 10
 
 // distortion helper macros
 #define BACKFACE_CULL 1
@@ -36,7 +36,6 @@
 // #define NEAR_PLANE 0.2
 // #define FAR_PLANE 100.0
 #define DETACH_WEIGHT 0
-#define MAX_ROUNDS 50
 
 __device__ const float near_n = 0.2;
 __device__ const float far_n = 100.0;
