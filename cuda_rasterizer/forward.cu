@@ -268,8 +268,7 @@ renderCUDA(
 	float* __restrict__ final_T,
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
-	float* __restrict__ out_color,
-	float* __restrict__ out_others)
+	float* __restrict__ out_color)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -300,10 +299,7 @@ renderCUDA(
 
 	// Initialize helper variables
 	float T = 1.0f;
-	uint32_t contributor = 0;
-	uint32_t last_contributor = 0;
 	float C[CHANNELS] = { 0 };
-
 
 #if RENDER_AXUTILITY
 	// render axutility ouput
@@ -314,12 +310,56 @@ renderCUDA(
 	float distortion = {0};
 	float median_depth = {0};
 	// float median_weight = {0};
-	float median_contributor = {-1};
+	int median_contributor = {0};
 
 #endif
+	int i;
+	Bucket<Node> bucket;
+
+	auto blend = [&](Node node) {
+
+		float alpha = node.alpha;
+		float depth = node.depth;
+		int j = node.local_j;
+
+		float4 nor_o = collected_normal_opacity[j];
+		float normal[3] = {nor_o.x, nor_o.y, nor_o.z};
+
+		float test_T = T * (1 - alpha);
+		if (test_T < 0.0001f)
+		{
+			done = true;
+			return;
+		}
+
+		float w = alpha * T;
+#if RENDER_AXUTILITY
+		// Render depth distortion map
+		// Efficient implementation of distortion loss, see 2DGS' paper appendix.
+		float A = 1-T;
+		float m = far_n / (far_n - near_n) * (1 - near_n / depth);
+		distortion += (m * m * A + M2 - 2 * m * M1) * w;
+		D  += depth * w;
+		M1 += m * w;
+		M2 += m * m * w;
+
+		if (T > 0.5) {
+			median_depth = depth;
+			// median_weight = w;
+			median_contributor = i * BLOCK_SIZE + j;
+		}
+		// Render normal map
+		for (int ch=0; ch<3; ch++) N[ch] += normal[ch] * w;
+#endif
+
+		// Eq. (3) from 3D Gaussian splatting paper.
+		for (int ch = 0; ch < CHANNELS; ch++)
+			C[ch] += features[collected_id[j] * CHANNELS + ch] * w;
+		T = test_T;
+	};
 
 	// Iterate over batches until all done or range is complete
-	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
+	for (i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
 	{
 		// End if entire block votes that it is done rasterizing
 		int num_done = __syncthreads_count(done);
@@ -341,10 +381,7 @@ renderCUDA(
 		block.sync();
 
 		// Iterate over current batch
-		for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++)
-		{
-			// Keep track of current position in range
-			contributor++;
+		for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++) {
 
 			// Fisrt compute two homogeneous planes, See Eq. (8)
 			const float2 xy = collected_xy[j];
@@ -371,9 +408,7 @@ renderCUDA(
 			// depth = (rho3d <= rho2d) ? depth : Tw.z 
 			if (depth < near_n) continue;
 
-			float4 nor_o = collected_normal_opacity[j];
-			float normal[3] = {nor_o.x, nor_o.y, nor_o.z};
-			float opa = nor_o.w;
+			float opa = collected_normal_opacity[j].w;
 
 			float power = -0.5f * rho;
 			if (power > 0.0f)
@@ -386,42 +421,28 @@ renderCUDA(
 			float alpha = min(0.99f, opa * exp(power));
 			if (alpha < 1.0f / 255.0f)
 				continue;
-			float test_T = T * (1 - alpha);
-			if (test_T < 0.0001f)
-			{
-				done = true;
-				continue;
-			}
+			
+			Node node(j, depth, alpha);
+			blend(node);
+			// bucket.add(node);
 
-			float w = alpha * T;
-#if RENDER_AXUTILITY
-			// Render depth distortion map
-			// Efficient implementation of distortion loss, see 2DGS' paper appendix.
-			float A = 1-T;
-			float m = far_n / (far_n - near_n) * (1 - near_n / depth);
-			distortion += (m * m * A + M2 - 2 * m * M1) * w;
-			D  += depth * w;
-			M1 += m * w;
-			M2 += m * m * w;
-
-			if (T > 0.5) {
-				median_depth = depth;
-				// median_weight = w;
-				median_contributor = contributor;
-			}
-			// Render normal map
-			for (int ch=0; ch<3; ch++) N[ch] += normal[ch] * w;
-#endif
-
-			// Eq. (3) from 3D Gaussian splatting paper.
-			for (int ch = 0; ch < CHANNELS; ch++)
-				C[ch] += features[collected_id[j] * CHANNELS + ch] * w;
-			T = test_T;
-
-			// Keep track of last range entry to update this
-			// pixel.
-			last_contributor = contributor;
+			// if (bucket.full()) {
+			// 	bucket.sort();
+			// 	for (int k = 0; k < bucket.num; k++) {
+			// 		blend(bucket.get(k));
+			// 	}
+			// 	bucket.init();
+			// }
 		}
+
+		// if (bucket.num > 0) {
+		// 	bucket.sort();
+		// 	for (int k = 0; k < bucket.num; k++) {
+		// 		blend(bucket.get(k));
+		// 	}
+		// 	bucket.init();
+		// }
+
 	}
 
 	// All threads that treat valid pixel write out their final
@@ -429,19 +450,19 @@ renderCUDA(
 	if (inside)
 	{
 		final_T[pix_id] = T;
-		n_contrib[pix_id] = last_contributor;
-		for (int ch = 0; ch < CHANNELS; ch++)
+		for (int ch = 0; ch < CHANNELS; ch++) {
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
+			out_color[(NORMAL_OFFSET+ch) * H * W + pix_id] = N[ch];
+		}
 
 #if RENDER_AXUTILITY
 		n_contrib[pix_id + H * W] = median_contributor;
 		final_T[pix_id + H * W] = M1;
 		final_T[pix_id + 2 * H * W] = M2;
-		out_others[pix_id + DEPTH_OFFSET * H * W] = D;
-		out_others[pix_id + ALPHA_OFFSET * H * W] = 1 - T;
-		for (int ch=0; ch<3; ch++) out_others[pix_id + (NORMAL_OFFSET+ch) * H * W] = N[ch];
-		out_others[pix_id + MIDDEPTH_OFFSET * H * W] = median_depth;
-		out_others[pix_id + DISTORTION_OFFSET * H * W] = distortion;
+		out_color[pix_id + DEPTH_OFFSET * H * W] = D;
+		out_color[pix_id + ALPHA_OFFSET * H * W] = 1 - T;
+		out_color[pix_id + MIDDEPTH_OFFSET * H * W] = median_depth;
+		out_color[pix_id + DISTORTION_OFFSET * H * W] = distortion;
 		// out_others[pix_id + MEDIAN_WEIGHT_OFFSET * H * W] = median_weight;
 #endif
 	}
@@ -461,8 +482,7 @@ void FORWARD::render(
 	float* final_T,
 	uint32_t* n_contrib,
 	const float* bg_color,
-	float* out_color,
-	float* out_others)
+	float* out_color)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -477,8 +497,7 @@ void FORWARD::render(
 		final_T,
 		n_contrib,
 		bg_color,
-		out_color,
-		out_others);
+		out_color);
 }
 
 void FORWARD::preprocess(int P, int D, int M,

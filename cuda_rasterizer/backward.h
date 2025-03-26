@@ -17,6 +17,8 @@
 #include "device_launch_parameters.h"
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
+#include "bucket.h"
+
 
 namespace BACKWARD
 {
@@ -34,8 +36,8 @@ namespace BACKWARD
 		const float* depths,
 		const float* final_Ts,
 		const uint32_t* n_contrib,
+		const float* out_color,
 		const float* dL_dpixels,
-		const float* dL_depths,
 		float * dL_dtransMat,
 		float3* dL_dmean2D,
 		float* dL_dnormal3D,

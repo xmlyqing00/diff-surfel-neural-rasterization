@@ -17,6 +17,8 @@
 #include "device_launch_parameters.h"
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
+#include "bucket.h"
+
 
 namespace FORWARD
 {
@@ -64,8 +66,7 @@ namespace FORWARD
 		float* final_T,
 		uint32_t* n_contrib,
 		const float* bg_color,
-		float* out_color,
-		float* out_others);
+		float* out_color);
 }
 
 

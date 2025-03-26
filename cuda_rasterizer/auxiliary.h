@@ -20,12 +20,13 @@
 
 #define TIGHTBBOX 0
 #define RENDER_AXUTILITY 1
-#define DEPTH_OFFSET 0
-#define ALPHA_OFFSET 1
-#define NORMAL_OFFSET 2 
-#define MIDDEPTH_OFFSET 5
-#define DISTORTION_OFFSET 6
-// #define MEDIAN_WEIGHT_OFFSET 7
+#define DEPTH_OFFSET 3
+#define ALPHA_OFFSET 4
+#define NORMAL_OFFSET 5
+#define MIDDEPTH_OFFSET 8
+#define DISTORTION_OFFSET 9
+// #define MEDIAN_WEIGHT_OFFSET 10
+#define DISORDER_OFFSET 10
 
 // distortion helper macros
 #define BACKFACE_CULL 1
@@ -193,8 +194,8 @@ __forceinline__ __device__ bool in_frustum(int idx,
 
 	// Bring points to screen space
 	float4 p_hom = transformPoint4x4(p_orig, projmatrix);
-	float p_w = 1.0f / (p_hom.w + 0.0000001f);
-	float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
+	// float p_w = 1.0f / (p_hom.w + 0.0000001f);
+	// float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
 	p_view = transformPoint4x3(p_orig, viewmatrix);
 
 	if (p_view.z <= 0.2f)// || ((p_proj.x < -1.3 || p_proj.x > 1.3 || p_proj.y < -1.3 || p_proj.y > 1.3)))
