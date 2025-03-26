@@ -155,8 +155,8 @@ renderCUDA(
 	const float* __restrict__ depths,
 	const float* __restrict__ final_Ts,
 	const uint32_t* __restrict__ n_contrib,
+	const float* __restrict__ out_colors,
 	const float* __restrict__ dL_dpixels,
-	const float* __restrict__ dL_depths,
 	float * __restrict__ dL_dtransMat,
 	float3* __restrict__ dL_dmean2D,
 	float* __restrict__ dL_dnormal3D,
@@ -212,14 +212,14 @@ renderCUDA(
 	float dL_dmax_dweight;
 
 	if (inside) {
-		dL_ddepth = dL_depths[DEPTH_OFFSET * H * W + pix_id];
-		dL_daccum = dL_depths[ALPHA_OFFSET * H * W + pix_id];
-		dL_dreg = dL_depths[DISTORTION_OFFSET * H * W + pix_id];
+		dL_ddepth = dL_dpixels[DEPTH_OFFSET * H * W + pix_id];
+		dL_daccum = dL_dpixels[ALPHA_OFFSET * H * W + pix_id];
+		dL_dreg = dL_dpixels[DISTORTION_OFFSET * H * W + pix_id];
 		for (int i = 0; i < 3; i++) 
-			dL_dnormal2D[i] = dL_depths[(NORMAL_OFFSET + i) * H * W + pix_id];
+			dL_dnormal2D[i] = dL_dpixels[(NORMAL_OFFSET + i) * H * W + pix_id];
 
-		dL_dmedian_depth = dL_depths[MIDDEPTH_OFFSET * H * W + pix_id];
-		// dL_dmax_dweight = dL_depths[MEDIAN_WEIGHT_OFFSET * H * W + pix_id];
+		dL_dmedian_depth = dL_dpixels[MIDDEPTH_OFFSET * H * W + pix_id];
+		// dL_dmax_dweight = dL_dpixels[MEDIAN_WEIGHT_OFFSET * H * W + pix_id];
 	}
 
 	// for compute gradient with respect to depth and normal
@@ -703,7 +703,7 @@ void BACKWARD::render(
 	const float* final_Ts,
 	const uint32_t* n_contrib,
 	const float* dL_dpixels,
-	const float* dL_depths,
+	const float* dL_dpixel,
 	float * dL_dtransMat,
 	float3* dL_dmean2D,
 	float* dL_dnormal3D,
@@ -724,7 +724,7 @@ void BACKWARD::render(
 		final_Ts,
 		n_contrib,
 		dL_dpixels,
-		dL_depths,
+		dL_dpixel,
 		dL_dtransMat,
 		dL_dmean2D,
 		dL_dnormal3D,
