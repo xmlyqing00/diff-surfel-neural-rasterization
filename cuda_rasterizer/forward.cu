@@ -392,7 +392,7 @@ renderCUDA(
 				continue;
 			}
 
-			float w = alpha * T;
+			const float w = alpha * T;
 #if RENDER_AXUTILITY
 			// Render depth distortion map
 			// Efficient implementation of distortion loss, see 2DGS' paper appendix.
@@ -420,6 +420,9 @@ renderCUDA(
 			// Keep track of last range entry to update this
 			// pixel.
 			last_contributor = contributor;
+			// if (pix.x==139 && pix.y == 147) {
+				// printf("fw round j c %d %d %d, todo %d, T %f, done %d\n", i, j, contributor, toDo, T, done);
+			// }
 		}
 	}
 

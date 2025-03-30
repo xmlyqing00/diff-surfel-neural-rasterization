@@ -172,13 +172,10 @@ renderCUDA(
 	const uint32_t pix_id = W * pix.y + pix.x;
 	const float2 pixf = {(float)pix.x, (float)pix.y};
 
-	const bool inside = pix.x < W&& pix.y < H;
+	const bool inside = pix.x < W && pix.y < H;
 	const uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
 
 	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
-
-	bool done = !inside;
-	int toDo = range.y - range.x;
 
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
@@ -189,17 +186,22 @@ renderCUDA(
 	__shared__ float3 collected_Tw[BLOCK_SIZE];
 	// __shared__ float collected_depths[BLOCK_SIZE];
 
+	bool done = !inside;
+	int toDo = range.y - range.x;
+
 	// In the forward, we stored the final value for T, the
 	// product of all (1 - alpha) factors. 
 	const float T_final = inside ? final_Ts[pix_id] : 0;
-	float T = T_final;
+	// if (pix.x == 139 && pix.y == 147) {
+		// printf("T_final %f\n", T_final);
+	// }
+	float T = 1.0f;
 
 	// We start from the back. The ID of the last contributing
 	// Gaussian is known from each pixel from the forward.
-	uint32_t contributor = toDo;
+	uint32_t contributor = 0;
 	const int last_contributor = inside ? n_contrib[pix_id] : 0;
 
-	float accum_rec[C] = { 0 };
 	float dL_dpixel[C];
 
 #if RENDER_AXUTILITY
@@ -211,42 +213,348 @@ renderCUDA(
 	float dL_dmedian_depth;
 	float dL_dmax_dweight;
 
+	float final_color[C] = { 0 };
+	float final_normal[C] = { 0 };
+	float final_depth = 0;
+	float final_alpha = 0;
+
+	float acc_colors[C] = { 0 };
+	float acc_alphas = 0;
+	float acc_depths = 0;
+	float acc_normals[3] = {0, 0, 0};
+	float debug_dL_dalpha[1000];
+
 	if (inside) {
+		// dL_ddepth = dL_dpixels[DEPTH_OFFSET * H * W + pix_id];
+		// dL_daccum = dL_dpixels[ALPHA_OFFSET * H * W + pix_id];
+		// dL_dreg = dL_dpixels[DISTORTION_OFFSET * H * W + pix_id];
+		// for (int i = 0; i < 3; i++) 
+		// 	dL_dnormal2D[i] = dL_dpixels[(NORMAL_OFFSET + i) * H * W + pix_id];
+
+		// dL_dmedian_depth = dL_dpixels[MIDDEPTH_OFFSET * H * W + pix_id];
+		// // dL_dmax_dweight = dL_dpixels[MEDIAN_WEIGHT_OFFSET * H * W + pix_id];
+
+		final_depth = out_colors[DEPTH_OFFSET * H * W + pix_id];
+		final_alpha = out_colors[ALPHA_OFFSET * H * W + pix_id];
+
 		dL_ddepth = dL_dpixels[DEPTH_OFFSET * H * W + pix_id];
 		dL_daccum = dL_dpixels[ALPHA_OFFSET * H * W + pix_id];
 		dL_dreg = dL_dpixels[DISTORTION_OFFSET * H * W + pix_id];
-		for (int i = 0; i < 3; i++) 
-			dL_dnormal2D[i] = dL_dpixels[(NORMAL_OFFSET + i) * H * W + pix_id];
+		for (int ch = 0; ch < 3; ch++) {
+			final_color[ch] = out_colors[ch * H * W + pix_id] - T_final * bg_color[ch];
+			final_normal[ch] = out_colors[(NORMAL_OFFSET + ch) * H * W + pix_id];
+
+			dL_dpixel[ch] = dL_dpixels[ch * H * W + pix_id];
+			dL_dnormal2D[ch] = dL_dpixels[(NORMAL_OFFSET + ch) * H * W + pix_id];
+		}
+
+		if (pix.x == 200 && pix.y == 200) {
+			// printf("final normal %f %f %f\n", final_normal[0], final_normal[1], final_normal[2]);
+		}
 
 		dL_dmedian_depth = dL_dpixels[MIDDEPTH_OFFSET * H * W + pix_id];
 		// dL_dmax_dweight = dL_dpixels[MEDIAN_WEIGHT_OFFSET * H * W + pix_id];
 	}
 
 	// for compute gradient with respect to depth and normal
-	float last_depth = 0;
-	float last_normal[3] = { 0 };
-	float accum_depth_rec = 0;
-	float accum_alpha_rec = 0;
-	float accum_normal_rec[3] = {0};
 	// for compute gradient with respect to the distortion map
 	const float final_D = inside ? final_Ts[pix_id + H * W] : 0;
 	const float final_D2 = inside ? final_Ts[pix_id + 2 * H * W] : 0;
 	const float final_A = 1 - T_final;
-	float last_dL_dT = 0;
+	float iter_w = final_alpha;
+	float iter_D2 = final_D2;
+	float iter_D = final_D;
+			
 #endif
-
-	if (inside){
-		for (int i = 0; i < C; i++)
-			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
-	}
-
-	float last_alpha = 0;
-	float last_color[C] = { 0 };
 
 	// Gradient of pixel coordinate w.r.t. normalized 
 	// screen-space viewport corrdinates (-1 to 1)
 	const float ddelx_dx = 0.5 * W;
 	const float ddely_dy = 0.5 * H;
+
+	// Traverse all Gaussians
+	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
+	{
+		int all_done = __syncthreads_and(done);
+		if (all_done) break;
+
+		// Load auxiliary data into shared memory, start in the BACK
+		// and load them in revers order.
+		block.sync();
+		const int progress = i * BLOCK_SIZE + block.thread_rank();
+		if (range.x + progress < range.y)
+		{
+			const int coll_id = point_list[range.x + progress];
+			collected_id[block.thread_rank()] = coll_id;
+			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
+			collected_normal_opacity[block.thread_rank()] = normal_opacity[coll_id];
+			collected_Tu[block.thread_rank()] = {transMats[9 * coll_id+0], transMats[9 * coll_id+1], transMats[9 * coll_id+2]};
+			collected_Tv[block.thread_rank()] = {transMats[9 * coll_id+3], transMats[9 * coll_id+4], transMats[9 * coll_id+5]};
+			collected_Tw[block.thread_rank()] = {transMats[9 * coll_id+6], transMats[9 * coll_id+7], transMats[9 * coll_id+8]};
+			for (int ch = 0; ch < C; ch++)
+				collected_colors[ch * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C + ch];
+				// collected_depths[block.thread_rank()] = depths[coll_id];
+		}
+		block.sync();
+
+		// Iterate over Gaussians
+		for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++) {
+			// Keep track of current Gaussian ID. Skip, if this one
+			// is behind the last contributor for this pixel.
+			contributor++;
+			if (contributor <= 1000)
+				debug_dL_dalpha[contributor - 1] = 0;
+			// if ((pix.x==139 && pix.y==147) && contributor > last_contributor + BLOCK_SIZE) {
+				// printf("pix.xy %d %d, contributor %d, last_contributor %d, done %d, T %f\n", pix.x, pix.y, contributor, last_contributor, done, T);
+				// assert(contributor <= last_contributor);
+			// }
+
+			// compute ray-splat intersection as before
+			// Fisrt compute two homogeneous planes, See Eq. (8)
+			const float2 xy = collected_xy[j];
+			const float3 Tu = collected_Tu[j];
+			const float3 Tv = collected_Tv[j];
+			const float3 Tw = collected_Tw[j];
+			float3 k = pix.x * Tw - Tu;
+			float3 l = pix.y * Tw - Tv;
+			float3 p = cross(k, l);
+			if (p.z == 0.0) continue;
+			float2 s = {p.x / p.z, p.y / p.z};
+			float rho3d = (s.x * s.x + s.y * s.y); 
+			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
+			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
+			float rho = min(rho3d, rho2d);
+
+			// compute depth
+			float c_d = (s.x * Tw.x + s.y * Tw.y) + Tw.z; // Tw * [u,v,1]
+			// if a point is too small, its depth is not reliable?
+			// c_d = (rho3d <= rho2d) ? c_d : Tw.z; 
+			if (c_d < near_n) continue;
+			
+			float4 nor_o = collected_normal_opacity[j];
+			float normal[3] = {nor_o.x, nor_o.y, nor_o.z};
+			float opa = nor_o.w;
+
+			// accumulations
+
+			float power = -0.5f * rho;
+			if (power > 0.0f)
+				continue;
+
+			const float G = exp(power);
+			const float alpha = min(0.99f, opa * G);
+			if (alpha < 1.0f / 255.0f)
+				continue;
+
+			float test_T = T * (1 - alpha);
+			if (test_T < 0.0001f) {
+				done = true;
+				continue;
+			}
+
+			// if (pix.x==139 && pix.y == 147) {
+				// printf("vw round j c %d %d %d, todo %d, T %f, done %d\n", i, j, contributor, toDo, test_T, done);
+			// }
+
+			const float dchannel_dcolor = alpha * T;
+			const float w = alpha * T;
+			// Propagate gradients to per-Gaussian colors and keep
+			// gradients w.r.t. alpha (blending factor for a Gaussian/pixel
+			// pair).
+			float dL_dalpha = 0.0f;
+			const int global_id = collected_id[j];
+			// for (int ch = 0; ch < C; ch++)
+			// {
+			// 	const float c = collected_colors[ch * BLOCK_SIZE + j];
+			// 	// Update last color (to be used in the next iteration)
+			// 	accum_rec[ch] = last_alpha * last_color[ch] + (1.f - last_alpha) * accum_rec[ch];
+			// 	last_color[ch] = c;
+
+			// 	const float dL_dchannel = dL_dpixel[ch];
+			// 	dL_dalpha += (c - accum_rec[ch]) * dL_dchannel;
+			// 	// Update the gradients w.r.t. color of the Gaussian. 
+			// 	// Atomic, since this pixel is just one of potentially
+			// 	// many that were affected by this Gaussian.
+			// 	atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
+			// }
+			for (int ch = 0; ch < C; ch++)
+			{
+				const float c = collected_colors[ch * BLOCK_SIZE + j];
+				acc_colors[ch] += c * w;
+				const float accum_rec_ch = (final_color[ch] - acc_colors[ch]) / test_T;
+
+				dL_dalpha += (c - accum_rec_ch) * dL_dpixel[ch];
+				// Update the gradients w.r.t. color of the Gaussian. 
+				// Atomic, since this pixel is just one of potentially
+				// many that were affected by this Gaussian.
+				atomicAdd(&(dL_dcolors[global_id * C + ch]), w * dL_dpixel[ch]);
+			}
+
+			float dL_dz = 0.0f;
+			float dL_dweight = 0;
+#if RENDER_AXUTILITY
+			const float m_d = far_n / (far_n - near_n) * (1 - near_n / c_d);
+			const float dmd_dd = (far_n * near_n) / ((far_n - near_n) * c_d * c_d);
+
+			// this index is very important
+			if (contributor == median_contributor) {
+				dL_dz += dL_dmedian_depth;
+				// dL_dweight += dL_dmax_dweight;
+			}
+#if DETACH_WEIGHT 
+			// if not detached weight, sometimes 
+			// it will bia toward creating extragated 2D Gaussians near front
+			dL_dweight += 0;
+#else
+			dL_dweight += (final_D2 + m_d * m_d * final_A - 2 * m_d * final_D) * dL_dreg;
+#endif
+			iter_w = (iter_w - alpha) / (1 - alpha);
+			iter_D2 = (iter_D2 - c_d * c_d * alpha) / (1 - alpha);
+			iter_D = (iter_D - c_d * alpha) / (1 - alpha);
+			const float accum_dL_dw = final_D2 * iter_w + final_A * iter_D2 - 2 * final_D * iter_D;
+			dL_dalpha += dL_dweight - accum_dL_dw * dL_dreg;
+			// if (dL_dreg > 0) {
+			// 	if (contributor <= 1000) debug_dL_dalpha[contributor - 1] = dL_dz;
+			// 	if (pix.x == 139 && pix.y == 147) {
+			// 		printf("fw c gid %d %d.\t dL_dz %.9f, alphaT %f, dL_ddepth %.9f\n", contributor-1, global_id, dL_dz, alpha * T, dL_ddepth);
+			// 	}
+			// }
+
+			// if (pix.x == 200 && pix.y == 200) {
+				// printf("dL_dweight %.9f, last_dL_dT %.9f, dL_dreg %.9f\n", dL_dweight, last_dL_dT, dL_dreg);
+			// }
+			// if (pix.x == 200 && pix.y == 200 && (dL_dreg > 0)) {
+				// printf("fw round gid %d %d\tdL_dalpha %.9f\n", i, global_id, dL_dweight - accum_dL_dw * dL_dreg);
+			// }
+			
+			// propagate the current weight W_{i} to next weight W_{i-1}
+			// last_dL_dT = dL_dweight * alpha + (1 - alpha) * last_dL_dT;
+			const float dL_dmd = 2.0f * (T * alpha) * (m_d * final_A - final_D) * dL_dreg;
+			dL_dz += dL_dmd * dmd_dd;
+
+			// Propagate gradients w.r.t ray-splat depths
+			acc_depths += c_d * w;
+			const float accum_depth_rec = (final_depth - acc_depths) / test_T;
+			dL_dalpha += (c_d - accum_depth_rec) * dL_ddepth;
+
+			// Propagate gradients w.r.t. color ray-splat alphas
+			acc_alphas += w;
+			const float accum_alpha_rec = (final_alpha - acc_alphas) / test_T;
+			dL_dalpha += (1 - accum_alpha_rec) * dL_daccum;
+
+			// Propagate gradients to per-Gaussian normals
+			for (int ch = 0; ch < 3; ch++) {
+				acc_normals[ch] += normal[ch] * w;
+				const float accum_normal_rec_ch = (final_normal[ch] - acc_normals[ch]) / test_T;
+				dL_dalpha += (normal[ch] - accum_normal_rec_ch) * dL_dnormal2D[ch];
+				atomicAdd((&dL_dnormal3D[global_id * 3 + ch]), w * dL_dnormal2D[ch]);
+			}
+#endif
+
+			dL_dalpha *= T;
+
+			// Account for fact that alpha also influences how much of
+			// the background color is added if nothing left to blend
+			float bg_dot_dpixel = 0;
+			for (int i = 0; i < C; i++)
+				bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
+			dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
+
+			// Helpful reusable temporary variables
+			const float dL_dG = nor_o.w * dL_dalpha;
+#if RENDER_AXUTILITY
+			dL_dz += alpha * T * dL_ddepth; 
+#endif
+			// if (dL_dnormal2D[0] > 0 || dL_dnormal2D[1] > 0 || dL_dnormal2D[2] > 0) {
+			// 	if (contributor <= 1000) debug_dL_dalpha[contributor - 1] = dL_dz;
+			// 	if (pix.x == 139 && pix.y == 147) {
+			// 		printf("fw c gid %d %d.\t dL_dz %.9f, alphaT %f, dL_ddepth %.9f\n", contributor-1, global_id, dL_dz, alpha * T, dL_ddepth);
+			// 	}
+			// }
+			if (rho3d <= rho2d) {
+				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
+				const float2 dL_ds = {
+					dL_dG * -G * s.x + dL_dz * Tw.x,
+					dL_dG * -G * s.y + dL_dz * Tw.y
+				};
+				
+				const float3 dz_dTw = {s.x, s.y, 1.0};
+				const float dsx_pz = dL_ds.x / p.z;
+				const float dsy_pz = dL_ds.y / p.z;
+				const float3 dL_dp = {dsx_pz, dsy_pz, -(dsx_pz * s.x + dsy_pz * s.y)};
+				const float3 dL_dk = cross(l, dL_dp);
+				const float3 dL_dl = cross(dL_dp, k);
+
+				const float3 dL_dTu = {-dL_dk.x, -dL_dk.y, -dL_dk.z};
+				const float3 dL_dTv = {-dL_dl.x, -dL_dl.y, -dL_dl.z};
+				const float3 dL_dTw = {
+					pixf.x * dL_dk.x + pixf.y * dL_dl.x + dL_dz * dz_dTw.x, 
+					pixf.x * dL_dk.y + pixf.y * dL_dl.y + dL_dz * dz_dTw.y, 
+					pixf.x * dL_dk.z + pixf.y * dL_dl.z + dL_dz * dz_dTw.z};
+
+
+				// Update gradients w.r.t. 3D covariance (3x3 matrix)
+				atomicAdd(&dL_dtransMat[global_id * 9 + 0],  dL_dTu.x);
+				atomicAdd(&dL_dtransMat[global_id * 9 + 1],  dL_dTu.y);
+				atomicAdd(&dL_dtransMat[global_id * 9 + 2],  dL_dTu.z);
+				atomicAdd(&dL_dtransMat[global_id * 9 + 3],  dL_dTv.x);
+				atomicAdd(&dL_dtransMat[global_id * 9 + 4],  dL_dTv.y);
+				atomicAdd(&dL_dtransMat[global_id * 9 + 5],  dL_dTv.z);
+				atomicAdd(&dL_dtransMat[global_id * 9 + 6],  dL_dTw.x);
+				atomicAdd(&dL_dtransMat[global_id * 9 + 7],  dL_dTw.y);
+				atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dTw.z);
+			} else {
+				// Update gradients w.r.t. center of Gaussian 2D mean position
+				const float dG_ddelx = -G * FilterInvSquare * d.x;
+				const float dG_ddely = -G * FilterInvSquare * d.y;
+				atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); // not scaled
+				atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely); // not scaled
+				// Propagate the gradients of depth
+				atomicAdd(&dL_dtransMat[global_id * 9 + 6],  s.x * dL_dz);
+				atomicAdd(&dL_dtransMat[global_id * 9 + 7],  s.y * dL_dz);
+				atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dz);
+			}
+
+			// Update gradients w.r.t. opacity of the Gaussian
+			atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
+
+			T = test_T;
+		}
+	}
+
+
+
+
+
+
+	return;
+
+	//backward for debug
+	T = T_final;
+	done = !inside;
+	toDo = range.y - range.x;
+	contributor = toDo;
+	float accum_normal_rec[3] = {0};
+	float last_alpha = 0;
+	float last_normal[3] = {0};
+	float last_dL_dT = 0;
+	float accum_rec[C] = {0};
+	float last_color[C] = {0};
+	float accum_depth_rec = 0;
+	float last_depth = 0;
+	float accum_alpha_rec = 0;
+	// if (pix.x == 139 && pix.y == 147 && (dL_dnormal2D[0] > 0 || dL_dnormal2D[1] > 0 || dL_dnormal2D[2] > 0)) {
+	// 	printf("toDo %d, contributor %d, last_contributor %d\n", toDo, contributor, last_contributor);
+	// }
+	// if (inside) {
+	// 	dL_dreg = dL_dpixels[DISTORTION_OFFSET * H * W + pix_id];
+
+	// 	for (int ch = 0; ch < 3; ch++) {
+	// 		// dL_dpixel[ch] = dL_dpixels[ch * H * W + pix_id];
+	// 		// dL_dnormal2D[ch] = dL_dpixels[(NORMAL_OFFSET + ch) * H * W + pix_id];
+	// 	}	
+	// }
+
 
 	// Traverse all Gaussians
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
@@ -313,6 +621,10 @@ renderCUDA(
 
 			const float G = exp(power);
 			const float alpha = min(0.99f, opa * G);
+			// if (pix.x == 139 && pix.y == 147 && (dL_dnormal2D[0] > 0 || dL_dnormal2D[1] > 0 || dL_dnormal2D[2] > 0)) {
+			// 	if (contributor < 1000 && debug_dL_dalpha[contributor] > 1e-6) 
+			// 	printf("bw round c %d %d. G %f, opa %f, alpha %f\n", i, contributor, G, opa, alpha);
+			// }
 			if (alpha < 1.0f / 255.0f)
 				continue;
 
@@ -359,7 +671,7 @@ renderCUDA(
 			// propagate the current weight W_{i} to next weight W_{i-1}
 			last_dL_dT = dL_dweight * alpha + (1 - alpha) * last_dL_dT;
 			const float dL_dmd = 2.0f * (T * alpha) * (m_d * final_A - final_D) * dL_dreg;
-			dL_dz += dL_dmd * dmd_dd;
+			// dL_dz += dL_dmd * dmd_dd;
 
 			// Propagate gradients w.r.t ray-splat depths
 			accum_depth_rec = last_alpha * last_depth + (1.f - last_alpha) * accum_depth_rec;
@@ -368,16 +680,17 @@ renderCUDA(
 			// Propagate gradients w.r.t. color ray-splat alphas
 			accum_alpha_rec = last_alpha * 1.0 + (1.f - last_alpha) * accum_alpha_rec;
 			dL_dalpha += (1 - accum_alpha_rec) * dL_daccum;
-
+			
+			float tmp = 0;
 			// Propagate gradients to per-Gaussian normals
 			for (int ch = 0; ch < 3; ch++) {
 				accum_normal_rec[ch] = last_alpha * last_normal[ch] + (1.f - last_alpha) * accum_normal_rec[ch];
 				last_normal[ch] = normal[ch];
 				dL_dalpha += (normal[ch] - accum_normal_rec[ch]) * dL_dnormal2D[ch];
 				atomicAdd((&dL_dnormal3D[global_id * 3 + ch]), alpha * T * dL_dnormal2D[ch]);
+				tmp += alpha * T * dL_dnormal2D[ch];
 			}
 #endif
-
 			dL_dalpha *= T;
 			// Update last alpha (to be used in the next iteration)
 			last_alpha = alpha;
@@ -389,12 +702,34 @@ renderCUDA(
 				bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
 			dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
 
+			// if (pix.x == 139 && pix.y == 147 && (dL_dnormal2D[0] > 0 || dL_dnormal2D[1] > 0 || dL_dnormal2D[2] > 0)) {
+			// 	printf("bw round c gid %d %d %d.\tdL_dalpha %.9f\n", i, contributor, global_id, dL_dalpha);
+			// }
+
+
+			// last_alpha = alpha;
 
 			// Helpful reusable temporary variables
 			const float dL_dG = nor_o.w * dL_dalpha;
 #if RENDER_AXUTILITY
 			dL_dz += alpha * T * dL_ddepth; 
 #endif
+			// if ((dL_dnormal2D[0] > 0 || dL_dnormal2D[1] > 0 || dL_dnormal2D[2] > 0)) {
+			// 	if (contributor < 1000 && fabs(debug_dL_dalpha[contributor] - dL_dz) > 1e-6) {
+			// 		// 
+			// 		if (pix.x == 139 && pix.y == 147) {
+			// 			printf("bw pix %d %d, round c (lc) gid %d %d (%d) %d.\t alpha * T %.9f, fw %.9f\n", 
+			// 				pix.x, pix.y, i, contributor, last_contributor, global_id, alpha * T, debug_dL_dalpha[contributor]
+			// 			);
+			// 			printf("bw c gid %d %d.\t dL_dz %.9f, alphaT %f, dL_ddepth %.9f, median_contributor %d\n", contributor, global_id, dL_dz, alpha * T, dL_ddepth, median_contributor);
+
+			// 		}
+			// 	} else {
+			// 		if (pix.x == 139 && pix.y == 147) {
+			// 		printf("bw c gid %d %d.\t dL_dz %.9f, alphaT %f, dL_ddepth %.9f\n", contributor, global_id, dL_dz, alpha * T, dL_ddepth);
+			// 		}
+			// 	}
+			// }
 
 			if (rho3d <= rho2d) {
 				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
@@ -402,6 +737,7 @@ renderCUDA(
 					dL_dG * -G * s.x + dL_dz * Tw.x,
 					dL_dG * -G * s.y + dL_dz * Tw.y
 				};
+				
 				const float3 dz_dTw = {s.x, s.y, 1.0};
 				const float dsx_pz = dL_ds.x / p.z;
 				const float dsy_pz = dL_ds.y / p.z;
@@ -441,6 +777,7 @@ renderCUDA(
 
 			// Update gradients w.r.t. opacity of the Gaussian
 			atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
+
 		}
 	}
 }
