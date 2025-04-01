@@ -10,7 +10,8 @@
 class Node {
 public:
     float depth, alpha;
-    int next_id, local_j;
+    int local_j;
+    short next_id;
     __device__ Node() {}
     __device__ Node(int local_j, float depth, float alpha) {
         this->local_j = local_j;
@@ -23,11 +24,13 @@ public:
 template<typename T>
 class Bucket {
 
+private:
+    short num;
+    float depth_min, depth_max;
+
 public:
     T nodes[BUCKET_SIZE];
     int heads[BUCKET_SIZE];
-    int num;
-    float depth_min, depth_max;
     int sorted[BUCKET_SIZE];
     bool sorted_flag;
 
@@ -50,9 +53,8 @@ public:
         if (num < 2) return;
 
         const float scale = depth_max - depth_min;
-        int bucket_size = BUCKET_SIZE - 1;
-        for (int i = 0; i < num; i++) {
-            int bucket_idx = (int) ((nodes[i].depth - depth_min) / scale * bucket_size);
+        for (short i = 0; i < num; i++) {
+            short bucket_idx = (short) ((nodes[i].depth - depth_min) / scale * (BUCKET_SIZE - 1));
             // if (bucket_idx >= BUCKET_SIZE) {
             //     printf("bucket_idx %d, depth %f, depth_min %f, depth_max %f, scale %f, bucket_num %d\n", bucket_idx, nodes[i].depth, depth_min, depth_max, scale, num);
             //     assert(bucket_idx >= 0 && bucket_idx < BUCKET_SIZE);
@@ -60,8 +62,8 @@ public:
             if (heads[bucket_idx] == -1) {
                 heads[bucket_idx] = i;
             } else {
-                int node_idx = heads[bucket_idx];
-                int prev_idx = -1;
+                short node_idx = heads[bucket_idx];
+                short prev_idx = -1;
                 if (ascending) {
                     while (node_idx != -1 && nodes[node_idx].depth < nodes[i].depth) {
                         prev_idx = node_idx;
@@ -85,8 +87,8 @@ public:
         }
         
         if (ascending) {
-            for (int i = 0, j = 0; i < BUCKET_SIZE; i++) {
-                int idx = heads[i];
+            for (short i = 0, j = 0; i < BUCKET_SIZE; i++) {
+                short idx = heads[i];
                 while (idx != -1) {
                     // assert(j < BUCKET_SIZE);
                     sorted[j++] = idx;
@@ -94,8 +96,8 @@ public:
                 }
             }
         } else {
-            for (int i = BUCKET_SIZE - 1, j = 0; i >= 0; i--) {
-                int idx = heads[i];
+            for (short i = BUCKET_SIZE - 1, j = 0; i >= 0; i--) {
+                short idx = heads[i];
                 while (idx != -1) {
                     // assert(j < BUCKET_SIZE);
                     sorted[j++] = idx;
@@ -107,18 +109,21 @@ public:
         sorted_flag = true;
     }
 
-    __device__ bool full() {
+    __forceinline__ __device__ short size() {
+        return num;
+    }
+
+    __forceinline__ __device__ bool full() {
         return num == BUCKET_SIZE;
     }
 
-    __device__ void add(const T &node) {
-        // assert(num < BUCKET_SIZE);
+    __forceinline__ __device__ void push(const T &node) {
         nodes[num++] = node;
         depth_min = fmin(depth_min, node.depth);
         depth_max = fmax(depth_max, node.depth);
     }
 
-    __device__ T get(int idx) {
+    __forceinline__ __device__ T get(int idx) {
         if (sorted_flag) idx = sorted[idx];
         return nodes[idx];
     }
